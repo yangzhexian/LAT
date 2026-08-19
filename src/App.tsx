@@ -18,6 +18,7 @@ import "./styles.css";
 
 const SETTINGS_KEY = "lat.settings.v1";
 const DOWNLOAD_MODEL = "hy-mt2-7b:q6_k";
+const DOWNLOAD_MODEL_NAMES = [DOWNLOAD_MODEL, "hy-mt2-7b-q6_k"];
 const DEFAULT_SETTINGS: UserSettings = {
   theme: "dark",
   layout: "horizontal",
@@ -75,7 +76,7 @@ function ModelSelector({
   onRefresh: () => void;
 }) {
   const models = status?.models || [];
-  const hasDownloadModel = models.some((model) => model.name === DOWNLOAD_MODEL);
+  const hasDownloadModel = models.some((model) => DOWNLOAD_MODEL_NAMES.includes(model.name));
   return (
     <section className="select-screen">
       <img className="hero-icon" src="/lat-icon.svg" alt="LAT" />
