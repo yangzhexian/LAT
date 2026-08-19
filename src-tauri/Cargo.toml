@@ -1,6 +1,6 @@
 [package]
 name = "hy-mt2-local-translator"
-version = "0.1.1"
+version = "0.1.1-beta.1"
 description = "Hy-MT2 local Ollama translation desktop app"
 authors = ["LLM-Translate"]
 edition = "2021"
