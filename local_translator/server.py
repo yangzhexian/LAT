@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from .config import Settings
+from .environment import DOWNLOAD_MODEL, inspect_download_environment
 from .engine import TranslationEngine, TranslationOutputError, TranslationRequestError
 from .ollama_client import OllamaError
 
@@ -152,6 +153,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             if self.path == "/admin/status":
                 self._json(200, self.app.engine.manager.status())
                 return
+            if self.path == "/admin/environment":
+                self._json(200, inspect_download_environment())
+                return
             if self.path == "/v1/models":
                 status = self.app.engine.manager.status()
                 self._json(
@@ -200,6 +204,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"status": "shutting_down"})
                 threading.Thread(target=self.app.stop, daemon=True).start()
                 return
+            if self.path == "/admin/download":
+                self._stream_download(self._read_json())
+                return
             if self.path not in {"/translate", "/translate/stream", "/v1/chat/completions"}:
                 self._json(404, {"error": {"message": "not found", "type": "not_found"}})
                 return
@@ -230,6 +237,52 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as error:
             LOGGER.exception("request failed")
             self._json(500, {"error": {"message": str(error), "type": "internal_error"}})
+
+    def _stream_download(self, body: dict[str, Any]) -> None:
+        requested_model = body.get("model", DOWNLOAD_MODEL)
+        if not isinstance(requested_model, str) or requested_model.strip() != DOWNLOAD_MODEL:
+            raise TranslationRequestError(f"当前下载入口只支持 {DOWNLOAD_MODEL}")
+
+        client = self.app.engine.manager.ensure_server()
+        installed = {
+            item.get("name")
+            for item in client.tags()
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        self.send_response(200)
+        self._headers("text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def emit(event: dict[str, Any]) -> None:
+            self.wfile.write(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        if DOWNLOAD_MODEL in installed:
+            emit({"type": "download", "status": "already_present", "percent": 100})
+            return
+
+        try:
+            for event in client.pull_stream(DOWNLOAD_MODEL):
+                total = event.get("total")
+                completed = event.get("completed")
+                progress: dict[str, Any] = {
+                    "type": "download",
+                    "status": event.get("status", "downloading"),
+                }
+                if isinstance(total, (int, float)) and total > 0 and isinstance(completed, (int, float)):
+                    progress["percent"] = round(min(100.0, completed * 100 / total), 1)
+                    progress["completed_bytes"] = completed
+                    progress["total_bytes"] = total
+                if isinstance(event.get("digest"), str):
+                    progress["digest"] = event["digest"]
+                if isinstance(event.get("error"), str):
+                    progress.update({"type": "error", "message": event["error"]})
+                emit(progress)
+        except OllamaError as error:
+            emit({"type": "error", "message": str(error)})
 
     def _stream_translation(self, body: dict[str, Any]) -> None:
         self.send_response(200)

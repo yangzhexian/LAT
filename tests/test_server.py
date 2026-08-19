@@ -37,7 +37,30 @@ class ServerTests(unittest.TestCase):
             body = json.loads(response.read().decode())
         self.assertEqual(body["choices"][0]["message"]["content"], "Hello")
 
+    def test_model_download_stream_reports_progress(self):
+        client = Mock()
+        client.tags.return_value = []
+        client.pull_stream.return_value = iter(
+            [
+                {"status": "pulling manifest"},
+                {"status": "downloading", "total": 100, "completed": 40},
+                {"status": "success"},
+            ]
+        )
+        self.httpd.app.engine.manager.ensure_server = Mock(return_value=client)
+        request = urllib.request.Request(
+            self.url + "/admin/download",
+            data=json.dumps({"model": "hy-mt2-7b:q6_k"}).encode(),
+            headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+            method="POST",
+        )
+
+        with urllib.request.urlopen(request) as response:
+            body = response.read().decode()
+
+        self.assertIn('"status": "downloading"', body)
+        self.assertIn('"percent": 40.0', body)
+
 
 if __name__ == "__main__":
     unittest.main()
-

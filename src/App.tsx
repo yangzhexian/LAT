@@ -1,11 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { MathJaxContext } from "better-react-mathjax";
 import { LatexPreview } from "./components/LatexPreview";
-import { ensureGateway, getStatus, loadModel, startOllama, translateStream, unloadModel } from "./lib/api";
+import { downloadModelStream, ensureGateway, getDownloadEnvironment, getStatus, loadModel, startOllama, translateStream, unloadModel } from "./lib/api";
 import { LANGUAGES, languageName } from "./lib/languages";
 import { formatBytes, normalizeForTranslation } from "./lib/text";
 import type {
   AppScreen,
+  DownloadEnvironment,
+  DownloadEvent,
   OllamaModel,
   OllamaStatus,
   StreamEvent,
@@ -15,6 +17,7 @@ import type {
 import "./styles.css";
 
 const SETTINGS_KEY = "lat.settings.v1";
+const DOWNLOAD_MODEL = "hy-mt2-7b:q6_k";
 const DEFAULT_SETTINGS: UserSettings = {
   theme: "dark",
   layout: "horizontal",
@@ -58,6 +61,8 @@ function ModelSelector({
   loading,
   onSelect,
   onEnable,
+  download,
+  onDownload,
   onRefresh,
 }: {
   status: OllamaStatus | null;
@@ -65,9 +70,12 @@ function ModelSelector({
   loading: boolean;
   onSelect: (value: string) => void;
   onEnable: () => void;
+  download: DownloadState;
+  onDownload: () => void;
   onRefresh: () => void;
 }) {
   const models = status?.models || [];
+  const hasDownloadModel = models.some((model) => model.name === DOWNLOAD_MODEL);
   return (
     <section className="select-screen">
       <img className="hero-icon" src="/lat-icon.svg" alt="LAT" />
@@ -92,6 +100,17 @@ function ModelSelector({
         ))}
       </div>
       {!models.length && <div className="empty-card">没有发现本地 Ollama 模型 请先安装模型或检查 Ollama 服务</div>}
+      {!hasDownloadModel && <div className="download-card">
+        <div className="download-card-header"><div><strong>下载 Hy-MT2 Q6_K</strong><small>hy-mt2-7b:q6_k · 下载完成后自动启用</small></div><span className="download-icon">↓</span></div>
+        {download.environment && <div className={`environment-note ${download.environment.status}`}>
+          <strong>{download.environment.message}</strong>
+          {download.environment.best_gpu && <small>{download.environment.best_gpu.name} · 总显存 {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB · 可用 {download.environment.best_gpu.free_vram_gib.toFixed(2)} GiB</small>}
+          {download.environment.suggestion && <span>{download.environment.suggestion}</span>}
+        </div>}
+        {download.error && <div className="error-banner">{download.error}</div>}
+        {download.busy && <div className="download-progress"><div className="download-progress-label"><span>{download.status || "准备下载"}</span><span>{download.percent.toFixed(1)}%</span></div><div className="progress-track"><span style={{ width: `${Math.max(2, download.percent)}%` }} /></div></div>}
+        <button className="secondary-button download-button" disabled={loading || download.busy} onClick={onDownload}>{download.busy ? "正在下载模型…" : "检测环境并下载"}</button>
+      </div>}
       {status?.warning && <div className="error-banner">{status.warning}</div>}
       <button className="primary-button enable-button" disabled={!selectedModel || loading || !models.length} onClick={onEnable}>
         {loading ? "正在启用模型…" : "启用模型"}
@@ -99,6 +118,14 @@ function ModelSelector({
       <p className="caption">当前针对 Hy-MT2 翻译策略进行了优化 其他模型仍可发现和尝试</p>
     </section>
   );
+}
+
+interface DownloadState {
+  busy: boolean;
+  percent: number;
+  status: string;
+  error: string;
+  environment: DownloadEnvironment | null;
 }
 
 function LanguageSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -280,6 +307,7 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState("");
   const [settings, setSettings] = useState<UserSettings>(readSettings);
   const [busy, setBusy] = useState(false);
+  const [download, setDownload] = useState<DownloadState>({ busy: false, percent: 0, status: "", error: "", environment: null });
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -338,10 +366,49 @@ export default function App() {
     }
   }
 
+  async function downloadHyModel() {
+    setBusy(true);
+    setDownload({ busy: true, percent: 0, status: "正在检测 GPU 显存", error: "", environment: null });
+    setError("");
+    try {
+      const environment = await getDownloadEnvironment();
+      setDownload((current) => ({ ...current, environment, status: "准备下载" }));
+      if (environment.status !== "ready") {
+        const detail = [environment.message, environment.suggestion, "仍要继续下载吗？"].filter(Boolean).join("\n\n");
+        if (!window.confirm(detail)) {
+          setDownload((current) => ({ ...current, busy: false, status: "已取消" }));
+          return;
+        }
+      }
+      await downloadModelStream(DOWNLOAD_MODEL, (event: DownloadEvent) => {
+        if (event.type === "error") {
+          setDownload((current) => ({ ...current, error: event.message || "模型下载失败" }));
+          return;
+        }
+        setDownload((current) => ({
+          ...current,
+          percent: event.percent ?? current.percent,
+          status: event.status || current.status,
+        }));
+      });
+      await loadModel(DOWNLOAD_MODEL);
+      const next = await refresh();
+      setStatus(next);
+      setSelectedModel(DOWNLOAD_MODEL);
+      setScreen("translator");
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setDownload((current) => ({ ...current, error: message }));
+    } finally {
+      setBusy(false);
+      setDownload((current) => ({ ...current, busy: false }));
+    }
+  }
+
   let content: ReactNode;
   if (screen === "loading") content = <section className="loading-screen"><div className="spinner" /><h1>正在连接本地服务</h1><p>检测 Ollama 和本地模型…</p></section>;
   else if (screen === "error") content = <section className="loading-screen"><div className="error-icon">!</div><h1>无法启动 LAT</h1><p>{error}</p><button className="primary-button" onClick={() => window.location.reload()}>重新连接</button></section>;
-  else if (screen === "select") content = <ModelSelector status={status} selectedModel={selectedModel} loading={busy} onSelect={setSelectedModel} onEnable={enableSelectedModel} onRefresh={() => void refresh()} />;
+  else if (screen === "select") content = <ModelSelector status={status} selectedModel={selectedModel} loading={busy} download={download} onSelect={setSelectedModel} onEnable={enableSelectedModel} onDownload={() => void downloadHyModel()} onRefresh={() => void refresh()} />;
   else content = status ? <TranslatorWorkspace status={status} settings={settings} onSettingsChange={(next) => setSettings((current) => ({ ...current, ...next }))} onDisable={() => void disableModel()} /> : null;
 
   return <MathJaxContext version={3} config={mathJaxConfig} src="/mathjax/tex-chtml.js">{content}</MathJaxContext>;

@@ -173,6 +173,37 @@ class OllamaClient:
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise OllamaError(f"Ollama 流式连接失败 ({self.base_url}): {error}") from error
 
+    def pull_stream(self, model: str) -> Iterator[dict[str, Any]]:
+        """Yield Ollama model download events from the newline-delimited API."""
+        payload = {"model": model, "stream": True}
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            urllib.parse.urljoin(self.base_url + "/", "api/pull"),
+            data=body,
+            headers={"Accept": "application/x-ndjson", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=max(self.settings.request_timeout_seconds, 3600.0),
+            ) as response:
+                for raw_line in response:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                        raise OllamaError(f"Ollama 下载响应包含无效 JSON: {line[:300]!r}") from error
+                    if isinstance(event, dict):
+                        yield event
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise OllamaHTTPError(error.code, detail or str(error)) from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise OllamaError(f"Ollama 模型下载连接失败 ({self.base_url}): {error}") from error
+
     def load(self, model: str) -> dict[str, Any]:
         return self.chat(model, [], {}, self.settings.keep_alive)
 

@@ -1,4 +1,4 @@
-import type { OllamaStatus, StreamEvent, TranslationRequest } from "../types";
+import type { DownloadEnvironment, DownloadEvent, OllamaStatus, StreamEvent, TranslationRequest } from "../types";
 
 const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL || "http://127.0.0.1:8787").replace(/\/$/, "");
 
@@ -38,6 +38,10 @@ export function getStatus(): Promise<OllamaStatus> {
   return request<OllamaStatus>("/admin/status");
 }
 
+export function getDownloadEnvironment(): Promise<DownloadEnvironment> {
+  return request<DownloadEnvironment>("/admin/environment");
+}
+
 export function startOllama(): Promise<unknown> {
   return request("/admin/start", { method: "POST" });
 }
@@ -56,6 +60,43 @@ export function unloadModel(model?: string): Promise<unknown> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(model ? { model } : {}),
   });
+}
+
+export async function downloadModelStream(
+  model: string,
+  onEvent: (event: DownloadEvent) => void,
+): Promise<void> {
+  const response = await fetch(`${GATEWAY_URL}/admin/download`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ model }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(body.error?.message || `模型下载请求失败 (${response.status})`);
+  }
+  if (!response.body) throw new Error("模型下载没有返回流");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let streamError = "";
+  while (true) {
+    const chunk = await reader.read();
+    buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() || "";
+    for (const raw of events) {
+      const line = raw.split("\n").find((item) => item.startsWith("data: "));
+      if (line) {
+        const event = JSON.parse(line.slice(6)) as DownloadEvent;
+        if (event.type === "error") streamError = event.message || "模型下载失败";
+        onEvent(event);
+      }
+    }
+    if (chunk.done) break;
+  }
+  if (streamError) throw new Error(streamError);
 }
 
 export async function shutdownGateway(): Promise<void> {

@@ -40,6 +40,32 @@ export interface OllamaStatus {
   warning?: string;
 }
 
+export interface GpuInfo {
+  name: string;
+  total_vram_gib: number;
+  free_vram_gib: number;
+}
+
+export interface DownloadEnvironment {
+  model: string;
+  recommended_vram_gib: number;
+  gpus: GpuInfo[];
+  best_gpu?: GpuInfo;
+  status: "ready" | "busy" | "insufficient" | "unknown";
+  message: string;
+  suggestion: string;
+}
+
+export interface DownloadEvent {
+  type: "download" | "error";
+  status?: string;
+  percent?: number;
+  completed_bytes?: number;
+  total_bytes?: number;
+  digest?: string;
+  message?: string;
+}
+
 export interface TranslationMetrics {
   generated_tokens?: number | null;
   eval_duration_ns?: number | null;
