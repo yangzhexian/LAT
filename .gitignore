@@ -1,0 +1,24 @@
+# Ollama content-addressed model blobs and manifests.
+models/ollama/
+
+# Local service logs and process metadata.
+.ollama-runtime/
+
+# Python cache and local configuration.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+translator.config.json
+
+# Tauri / frontend build output.
+node_modules/
+dist/
+build/
+*.spec
+*.tsbuildinfo
+public/mathjax/*.js
+public/mathjax/output/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep

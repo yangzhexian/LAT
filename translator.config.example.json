@@ -1,0 +1,20 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "ollama_url": "http://127.0.0.1:11434",
+  "ollama_executable": "",
+  "model_name": "hy-mt2-7b:q6_k",
+  "model_dir": "",
+  "auto_start_ollama": true,
+  "unload_on_exit": true,
+  "keep_alive": "10m",
+  "temperature": 0.2,
+  "top_p": 0.6,
+  "top_k": 20,
+  "repetition_penalty": 1.05,
+  "seed": 42,
+  "num_ctx": 8192,
+  "max_output_tokens": 4096,
+  "default_target_language": "",
+  "retry_on_bad_output": true
+}

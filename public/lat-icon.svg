@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>LAT — Local AI Translator</title>
+  <rect width="512" height="512" rx="92" fill="#062b73"/>
+  <path d="M247 150h203v54h-55v244h-54V204h-94z" fill="#075dff"/>
+  <path d="M72 150h57v240h143v58H72z" fill="#fbfbfb"/>
+  <path d="M154 390 224 164h48l78 283h-58l-18-64h-63l-18 64h-58zm72-108h31l-16-67z" fill="#fbfbfb" fill-rule="evenodd"/>
+  <path d="M194 447h90l-45-87z" fill="#66e6b0"/>
+</svg>

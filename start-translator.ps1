@@ -1,0 +1,4 @@
+$ErrorActionPreference = "Stop"
+$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $projectRoot
+python -m local_translator --config "$projectRoot\translator.config.json" serve

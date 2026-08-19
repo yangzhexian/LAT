@@ -1,0 +1,30 @@
+{
+  "name": "lat-local-translator",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run prepare:mathjax && vite --host 127.0.0.1 --port 1420",
+    "prepare:mathjax": "node scripts/copy-mathjax.mjs",
+    "build": "npm run prepare:mathjax && npm run typecheck && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-shell": "^2.3.0",
+    "better-react-mathjax": "^2.0.0",
+    "mathjax": "^3.2.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3"
+  }
+}
