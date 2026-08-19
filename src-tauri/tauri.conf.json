@@ -37,6 +37,11 @@
       "icons/icon.ico",
       "icons/icon.icns"
     ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis-hooks.nsh"
+      }
+    },
     "externalBin": ["binaries/hy-mt2-gateway"]
   }
 }

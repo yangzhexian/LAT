@@ -94,6 +94,8 @@ npm run tauri build
 
 安装包不包含 Ollama 模型；桌面端启动后通过 Ollama `/api/tags` 自动发现本机模型。Tauri 的 sidecar 只负责启动翻译网关，模型仍由本机 Ollama 管理。
 
+关闭窗口、点击关闭模型或卸载 LAT 时，应用会先请求网关退出并终止 `hy-mt2-gateway.exe`。Windows NSIS 卸载器也会在删除安装目录前清理 sidecar 进程，避免文件残留和后台占用。
+
 `feature/model-download-preflight` 分支另外提供开始页下载 `hy-mt2-7b:q6_k` 的入口。下载前会通过 `nvidia-smi` 检查 GPU 显存，下载过程显示 Ollama 的实时进度，完成后自动加载模型。显存不足时会给出 `q4_k_m` 等更小量化模型建议，并由用户确认是否继续。
 
 ### 参考资料

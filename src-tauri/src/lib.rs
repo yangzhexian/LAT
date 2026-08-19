@@ -5,7 +5,7 @@ use std::net::TcpStream;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -19,9 +19,8 @@ fn gateway_is_ready() -> bool {
         return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let _ = stream.write_all(
-        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:8787\r\nConnection: close\r\n\r\n",
-    );
+    let _ = stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:8787\r\nConnection: close\r\n\r\n");
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
     response.contains("200") && response.contains("hy-mt2-local-translator")
@@ -39,7 +38,10 @@ fn request_gateway_shutdown() {
 }
 
 #[tauri::command]
-fn start_gateway(app: tauri::AppHandle, state: tauri::State<'_, GatewayState>) -> Result<(), String> {
+fn start_gateway(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, GatewayState>,
+) -> Result<(), String> {
     if gateway_is_ready() {
         return Ok(());
     }
@@ -69,18 +71,24 @@ fn start_gateway(app: tauri::AppHandle, state: tauri::State<'_, GatewayState>) -
 }
 
 #[tauri::command]
-fn stop_gateway(state: tauri::State<'_, GatewayState>) -> Result<(), String> {
+fn stop_gateway_process(app: &tauri::AppHandle) {
     request_gateway_shutdown();
-    std::thread::sleep(Duration::from_millis(250));
-    let mut guard = state.0.lock().map_err(|_| "网关状态锁不可用".to_string())?;
-    if let Some(child) = guard.take() {
-        child.kill().map_err(|error| format!("停止翻译网关失败: {error}"))?;
+    std::thread::sleep(Duration::from_millis(750));
+    if let Ok(mut guard) = app.state::<GatewayState>().0.lock() {
+        if let Some(child) = guard.take() {
+            let _ = child.kill();
+        }
     }
+}
+
+#[tauri::command]
+fn stop_gateway(app: tauri::AppHandle) -> Result<(), String> {
+    stop_gateway_process(&app);
     Ok(())
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(GatewayState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway])
@@ -90,6 +98,11 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building Tauri application");
+    app.run(|app, event| {
+        if matches!(event, RunEvent::ExitRequested { .. }) {
+            stop_gateway_process(app);
+        }
+    });
 }
