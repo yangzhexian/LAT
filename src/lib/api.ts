@@ -79,7 +79,7 @@ export function unloadModel(model?: string): Promise<unknown> {
   });
 }
 
-export async function downloadModelStream(model: string, onEvent: (event: DownloadEvent) => void): Promise<void> {
+export async function downloadModelStream(model: string, onEvent: (event: DownloadEvent) => void): Promise<"completed" | "cancelled"> {
   const response = await fetch(GATEWAY_URL + "/admin/download", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -95,6 +95,7 @@ export async function downloadModelStream(model: string, onEvent: (event: Downlo
   const decoder = new TextDecoder();
   let buffer = "";
   let streamError = "";
+  let wasCancelled = false;
   while (true) {
     const chunk = await reader.read();
     buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
@@ -105,14 +106,19 @@ export async function downloadModelStream(model: string, onEvent: (event: Downlo
       if (line) {
         const event = JSON.parse(line.slice(6)) as DownloadEvent;
         if (event.type === "error") streamError = event.message || "模型下载失败";
+        if (event.status === "cancelled") wasCancelled = true;
         onEvent(event);
       }
     }
     if (chunk.done) break;
   }
   if (streamError) throw new Error(streamError);
+  return wasCancelled ? "cancelled" : "completed";
 }
 
+export function cancelDownload(): Promise<unknown> {
+  return request("/admin/download/cancel", { method: "POST" });
+}
 export async function shutdownGateway(): Promise<void> {
   try {
     await request("/admin/shutdown", { method: "POST" });

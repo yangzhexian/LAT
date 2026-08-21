@@ -12,7 +12,7 @@ from typing import Any
 from .config import Settings
 from .environment import DOWNLOAD_MODEL, inspect_download_environment
 from .engine import TranslationEngine, TranslationOutputError, TranslationRequestError
-from .llama_client import LlamaError
+from .llama_client import DownloadCancelled, LlamaError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -144,6 +144,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"status": "shutting_down"})
                 threading.Thread(target=self.app.stop, daemon=True).start()
                 return
+            if self.path == "/admin/download/cancel":
+                self.app.engine.manager.cancel_download()
+                self._json(200, {"status": "cancelling"})
+                return
             if self.path in {"/admin/download", "/admin/model/download"}:
                 self._stream_download(self._read_optional_json())
                 return
@@ -188,8 +192,19 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             for event in self.app.engine.manager.install_stream():
                 emit(event)
+        except DownloadCancelled as error:
+            try:
+                emit({"type": "download", "status": "cancelled", "message": str(error)})
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.app.engine.manager.cancel_download()
         except LlamaError as error:
-            emit({"type": "error", "message": str(error)})
+            try:
+                emit({"type": "error", "message": str(error)})
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
 
     def _stream_translation(self, body: dict[str, Any]) -> None:
         self.send_response(200)

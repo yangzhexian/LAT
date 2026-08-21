@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 
 
 @dataclass

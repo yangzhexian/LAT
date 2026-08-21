@@ -42,6 +42,16 @@ class ServerTests(unittest.TestCase):
             body = json.loads(response.read().decode())
         self.assertEqual(body["choices"][0]["message"]["content"], "Hello")
 
+    def test_download_cancel_endpoint(self):
+        request = urllib.request.Request(
+            self.url + "/admin/download/cancel",
+            data=b"",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            body = json.loads(response.read().decode())
+        self.assertEqual(body["status"], "cancelling")
     def test_model_download_stream_reports_progress(self):
         request = urllib.request.Request(
             self.url + "/admin/download",

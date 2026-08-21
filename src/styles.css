@@ -146,3 +146,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .translator-screen { padding: 0 14px 12px; }
   .pane-header select { max-width: 170px; }
 }
+.download-action-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.cancel-button { border: 1px solid #b72f4d88; border-radius: 8px; padding: 9px 13px; background: transparent; color: #c33c59; font-size: 12px; font-weight: 700; }
+.cancel-button:hover { background: #b72f4d18; }
+.custom-directory-toggle { justify-self: start; border: 0; padding: 0; background: transparent; color: var(--subtle); font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
+.custom-directory-toggle:hover { color: var(--accent); }
+.custom-directory-panel { display: grid; gap: 7px; padding: 10px 0 0; border-top: 1px solid var(--line-soft); }
+.directory-input-row { display: flex; align-items: center; gap: 7px; }
+.directory-input { min-width: 0; flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; outline: 0; background: var(--control); color: var(--text); font-size: 12px; }
+.directory-input:focus { border-color: var(--accent); }
+.folder-button { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--control); color: var(--accent-soft); }
+.folder-button:hover { background: var(--control-hover); }
+.folder-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.custom-directory-footer { display: flex; align-items: center; justify-content: space-between; gap: 9px; color: var(--subtle); font-size: 10px; }
+.custom-directory-footer small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

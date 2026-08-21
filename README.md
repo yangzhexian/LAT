@@ -44,7 +44,7 @@ Python 网关负责管理 llama.cpp 生命周期、下载和校验运行时与�
 
 - Windows 10 或更新版本
 - NVIDIA GPU 和可用的 NVIDIA 驱动
-- RTX 5070 推荐至少保留约 10 GiB 可用显存
+- RTX 5070 推荐总显存至少为 10 GiB
 - Rust stable MSVC toolchain（仅开发和构建桌面端需要）
 - Node.js 18 或更新版本（仅开发和构建桌面端需要）
 - Python 3.10 或更新版本（仅开发和构建桌面端需要）
@@ -63,7 +63,7 @@ Copy-Item translator.config.example.json translator.config.json
 python -m local_translator serve
 ~~~
 
-网关默认监听 http://127.0.0.1:8787。首次使用时调用下载接口，或直接运行桌面端，在开始界面选择数据目录后安装运行时和模型。
+网关默认监听 http://127.0.0.1:8787。首次使用时调用下载接口，或直接运行桌面端，在下载卡片下方展开“自定义模型路径”后安装运行时和模型。
 
 ### Tauri desktop app
 
@@ -82,7 +82,7 @@ npm run dev
 
 打开应用后：
 
-1. 选择一个有足够空间且可写的本地目录
+1. 可选展开“自定义模型路径”，输入或选择一个有足够空间且可写的本地目录
 2. 点击“检测环境并开始”
 3. LAT 下载 llama.cpp CUDA 运行时
 4. LAT 下载并校验 Hy-MT2 Q6_K 权重
@@ -96,7 +96,7 @@ python -m pip install pyinstaller
 npm run tauri build
 ~~~
 
-当前 Beta 安装包版本为 0.1.1-beta.1。生成文件位于：
+当前 Beta 安装包版本为 0.1.1-beta.2。生成文件位于：
 
 ~~~text
 src-tauri/target/release/bundle/nsis/
@@ -106,7 +106,7 @@ src-tauri/target/release/bundle/nsis/
 
 ## Runtime and model storage
 
-默认目录为项目下的 .lat-runtime。桌面端可以选择其他目录，例如：
+默认目录为安装路径下的 .lat-runtime。桌面端可以在下载卡片下方自定义其他目录，例如：
 
 ~~~text
 D:\Tools\LAT\data\
@@ -166,6 +166,7 @@ Model: hy-mt2-7b:q6_k
 - GET /admin/runtime/status
 - POST /admin/directory
 - POST /admin/download
+- POST /admin/download/cancel
 - POST /admin/load
 - POST /admin/unload
 
@@ -239,9 +240,14 @@ docs(readme): document Ollama-free setup
 
 确认目标目录可写并至少有约 8 GB 临时空间。LAT 会校验官方压缩包 SHA-256，校验失败时会删除未完成文件并允许重新下载。
 
+### 下载进度为 runtime · downloading 0.0%
+
+旧版本的运行时压缩包没有声明预估大小，前端因此只能显示 0.0%。新版本会从响应头读取运行时文件总大小并显示百分比和 MiB/s。下载过程会保留 `.part` 文件，网络中断后可以继续下载。
+
+下载卡片中的“终止下载”会通知网关停止当前任务；如果应用需要立即退出，也可以直接关闭窗口，Tauri 会先请求网关停止，再结束 sidecar。下次启动时可以重新点击下载，已完成的临时文件会继续复用。
 ### GPU 显存警告
 
-Hy-MT2-7B Q6_K 权重约 6.16 GB，实际运行还需要上下文和运行时显存。建议 RTX 5070 保留约 10 GiB 可用显存。关闭占用 GPU 的程序后重试，或选择更小的 Hy-MT2 模型。
+Hy-MT2-7B Q6_K 权重约 6.16 GB，LAT 预检使用 GPU 总显存而不是当前可用显存。总显存低于 10 GiB 时建议改用更小的 Hy-MT2 模型。
 
 ### 模型启动失败
 

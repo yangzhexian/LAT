@@ -60,7 +60,6 @@ export interface LocalStatus {
 export interface GpuInfo {
   name: string;
   total_vram_gib: number;
-  free_vram_gib: number;
 }
 
 export interface DownloadEnvironment {
@@ -69,7 +68,7 @@ export interface DownloadEnvironment {
   required_vram_gib?: number;
   gpus: GpuInfo[];
   best_gpu?: GpuInfo;
-  status: "ready" | "busy" | "insufficient" | "unknown";
+  status: "ready" | "insufficient" | "unknown";
   message: string;
   suggestion: string;
 }
@@ -81,6 +80,8 @@ export interface DownloadEvent {
   percent?: number;
   completed_bytes?: number;
   total_bytes?: number;
+  speed_bytes_per_second?: number;
+  speed_mib_per_second?: number;
   digest?: string;
   sha256?: string;
   message?: string;

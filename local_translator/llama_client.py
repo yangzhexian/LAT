@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -55,6 +56,10 @@ RUNTIME_ASSETS: dict[str, tuple[dict[str, str], ...]] = {
 
 
 class LlamaError(RuntimeError):
+    pass
+
+
+class DownloadCancelled(LlamaError):
     pass
 
 
@@ -229,6 +234,10 @@ class LlamaCppProcessManager:
         self.owned_process: subprocess.Popen[Any] | None = None
         self.server_port: int | None = None
         self.client: LlamaServerClient | None = None
+        self.download_cancel_event = threading.Event()
+        self.download_lock = threading.Lock()
+        self.download_response: Any | None = None
+        self._remember_data_root(settings.resolved_data_root)
 
     def set_data_root(self, root: str) -> dict[str, Any]:
         path = Path(root).expanduser().resolve()
@@ -236,7 +245,29 @@ class LlamaCppProcessManager:
         self.shutdown()
         self.settings.runtime_root = str(path)
         self.settings.model_dir = ""
+        self._remember_data_root(path)
         return self.status()
+
+    @staticmethod
+    def _remember_data_root(path: Path) -> None:
+        if os.name != "nt":
+            return
+        try:
+            import winreg
+
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\LAT") as key:
+                winreg.SetValueEx(key, "DataRoot", 0, winreg.REG_SZ, str(path))
+        except (ImportError, OSError):
+            LOGGER.debug("unable to persist LAT data root", exc_info=True)
+
+    def cancel_download(self) -> None:
+        self.download_cancel_event.set()
+        response = self.download_response
+        if response is not None:
+            try:
+                response.close()
+            except (OSError, ValueError):
+                pass
 
     @property
     def runtime_assets(self) -> tuple[DownloadAsset, ...]:
@@ -274,18 +305,23 @@ class LlamaCppProcessManager:
     def _download_asset(self, asset: DownloadAsset, destination: Path, phase: str) -> Iterator[dict[str, Any]]:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if self._verified(destination, asset.size, asset.sha256):
-            yield {"type": "download", "phase": phase, "status": "already_present", "percent": 100.0, "completed_bytes": destination.stat().st_size, "total_bytes": asset.size}
+            size = destination.stat().st_size
+            yield {"type": "download", "phase": phase, "status": "already_present", "percent": 100.0, "completed_bytes": size, "total_bytes": size, "speed_bytes_per_second": 0.0, "speed_mib_per_second": 0.0}
             return
+        if self.download_cancel_event.is_set():
+            raise DownloadCancelled("下载已取消")
 
         partial = destination.with_suffix(destination.suffix + ".part")
         current = partial.stat().st_size if partial.exists() else 0
-        headers = {"User-Agent": "LAT/0.1.1"}
+        headers = {"User-Agent": "LAT/0.1.1-beta.2"}
         if current:
             headers["Range"] = f"bytes={current}-"
         request = urllib.request.Request(asset.url, headers=headers)
         try:
-            response = urllib.request.urlopen(request, timeout=max(self.settings.request_timeout_seconds, 3600.0))
+            response = urllib.request.urlopen(request, timeout=30.0)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
+            if self.download_cancel_event.is_set():
+                raise DownloadCancelled("下载已取消") from error
             raise LlamaError(f"下载 {asset.name} 失败: {error}") from error
 
         status = getattr(response, "status", 200)
@@ -293,17 +329,42 @@ class LlamaCppProcessManager:
             current = 0
             partial.unlink(missing_ok=True)
         mode = "ab" if current else "wb"
-        completed = current
-        with response, partial.open(mode) as handle:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                completed += len(chunk)
-                percent = min(100.0, completed * 100 / asset.size) if asset.size else 0.0
-                yield {"type": "download", "phase": phase, "status": "downloading", "percent": round(percent, 1), "completed_bytes": completed, "total_bytes": asset.size}
+        total_bytes = asset.size
+        if total_bytes is None:
+            try:
+                content_length = int(response.headers.get("Content-Length", "0"))
+            except (TypeError, ValueError):
+                content_length = 0
+            total_bytes = content_length + current if content_length else None
 
+        self.download_response = response
+        completed = current
+        started = time.monotonic()
+        try:
+            with response, partial.open(mode) as handle:
+                yield {"type": "download", "phase": phase, "status": "connecting", "percent": round(completed * 100 / total_bytes, 1) if total_bytes else 0.0, "completed_bytes": completed, "total_bytes": total_bytes, "speed_bytes_per_second": 0.0, "speed_mib_per_second": 0.0}
+                while True:
+                    if self.download_cancel_event.is_set():
+                        raise DownloadCancelled("下载已取消 已保留已下载内容")
+                    try:
+                        chunk = response.read(1024 * 1024)
+                    except (TimeoutError, socket.timeout, urllib.error.URLError, OSError, ValueError) as error:
+                        if self.download_cancel_event.is_set():
+                            raise DownloadCancelled("下载已取消 已保留已下载内容") from error
+                        raise LlamaError(f"下载 {asset.name} 响应超时或连接中断: {error}") from error
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    completed += len(chunk)
+                    elapsed = max(time.monotonic() - started, 0.001)
+                    speed = completed / elapsed
+                    percent = min(100.0, completed * 100 / total_bytes) if total_bytes else 0.0
+                    yield {"type": "download", "phase": phase, "status": "downloading", "percent": round(percent, 1), "completed_bytes": completed, "total_bytes": total_bytes, "speed_bytes_per_second": round(speed, 1), "speed_mib_per_second": round(speed / (1024 * 1024), 3)}
+        finally:
+            self.download_response = None
+
+        if self.download_cancel_event.is_set():
+            raise DownloadCancelled("下载已取消 已保留已下载内容")
         if asset.size is not None and completed != asset.size:
             raise LlamaError(f"{asset.name} 下载不完整: {completed}/{asset.size} bytes")
         digest = self._sha256(partial)
@@ -312,7 +373,9 @@ class LlamaCppProcessManager:
             raise LlamaError(f"{asset.name} SHA-256 校验失败")
         os.replace(partial, destination)
         destination.with_suffix(destination.suffix + ".sha256").write_text(asset.sha256, encoding="utf-8")
-        yield {"type": "download", "phase": phase, "status": "verified", "percent": 100.0, "completed_bytes": completed, "total_bytes": asset.size, "sha256": digest}
+        elapsed = max(time.monotonic() - started, 0.001)
+        speed = completed / elapsed
+        yield {"type": "download", "phase": phase, "status": "verified", "percent": 100.0, "completed_bytes": completed, "total_bytes": total_bytes or completed, "speed_bytes_per_second": round(speed, 1), "speed_mib_per_second": round(speed / (1024 * 1024), 3), "sha256": digest}
 
     def _extract_runtime(self, archives: list[Path]) -> None:
         stage = Path(tempfile.mkdtemp(prefix="lat-llama-", dir=str(self.settings.resolved_data_root)))
@@ -321,7 +384,11 @@ class LlamaCppProcessManager:
                 with zipfile.ZipFile(archive) as bundle:
                     for item in bundle.infolist():
                         target = (stage / item.filename).resolve()
-                        if not str(target).startswith(str(stage.resolve())):
+                        try:
+                            safe = os.path.commonpath([str(stage.resolve()), str(target)]) == str(stage.resolve())
+                        except ValueError:
+                            safe = False
+                        if not safe:
                             raise LlamaError("运行时压缩包包含不安全路径")
                     bundle.extractall(stage)
             server = next(iter(stage.rglob("llama-server.exe")), None)
@@ -336,22 +403,27 @@ class LlamaCppProcessManager:
             shutil.rmtree(stage, ignore_errors=True)
 
     def install_stream(self) -> Iterator[dict[str, Any]]:
-        self.settings.resolved_data_root.mkdir(parents=True, exist_ok=True)
-        if self._server_executable() is None:
-            archives: list[Path] = []
-            for asset in self.runtime_assets:
-                archive = self.settings.resolved_data_root / "downloads" / f"{asset.name}.zip"
-                archives.append(archive)
-                yield from self._download_asset(asset, archive, "runtime")
-            self._extract_runtime(archives)
-            yield {"type": "download", "phase": "runtime", "status": "installed", "percent": 100.0}
-        else:
-            yield {"type": "download", "phase": "runtime", "status": "already_present", "percent": 100.0}
+        if not self.download_lock.acquire(blocking=False):
+            raise LlamaError("已有下载任务正在运行")
+        self.download_cancel_event.clear()
+        try:
+            self.settings.resolved_data_root.mkdir(parents=True, exist_ok=True)
+            if self._server_executable() is None:
+                archives: list[Path] = []
+                for asset in self.runtime_assets:
+                    archive = self.settings.resolved_data_root / "downloads" / f"{asset.name}.zip"
+                    archives.append(archive)
+                    yield from self._download_asset(asset, archive, "runtime")
+                self._extract_runtime(archives)
+                yield {"type": "download", "phase": "runtime", "status": "installed", "percent": 100.0}
+            else:
+                yield {"type": "download", "phase": "runtime", "status": "already_present", "percent": 100.0}
 
-        model_asset = DownloadAsset(MODEL_FILENAME, MODEL_URL, MODEL_SHA256, MODEL_SIZE)
-        yield from self._download_asset(model_asset, self.settings.resolved_model_path, "model")
-        yield {"type": "download", "phase": "model", "status": "installed", "percent": 100.0}
-
+            model_asset = DownloadAsset(MODEL_FILENAME, MODEL_URL, MODEL_SHA256, MODEL_SIZE)
+            yield from self._download_asset(model_asset, self.settings.resolved_model_path, "model")
+            yield {"type": "download", "phase": "model", "status": "installed", "percent": 100.0}
+        finally:
+            self.download_lock.release()
     def _choose_port(self) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -405,6 +477,7 @@ class LlamaCppProcessManager:
         raise LlamaError(f"llama.cpp 启动超时 请查看 {self.settings.resolved_log_file}")
 
     def shutdown(self) -> None:
+        self.cancel_download()
         process = self.owned_process
         self.owned_process = None
         self.client = None

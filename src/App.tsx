@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { MathJaxContext } from "better-react-mathjax";
 import { LatexPreview } from "./components/LatexPreview";
-import { downloadModelStream, ensureGateway, getDownloadEnvironment, getStatus, loadModel, selectDataDirectory, setDataDirectory, translateStream, unloadModel } from "./lib/api";
+import { cancelDownload, downloadModelStream, ensureGateway, getDownloadEnvironment, getStatus, loadModel, selectDataDirectory, setDataDirectory, translateStream, unloadModel } from "./lib/api";
 import { LANGUAGES, languageName } from "./lib/languages";
 import { formatBytes, normalizeForTranslation } from "./lib/text";
 import type { AppScreen, DownloadEnvironment, DownloadEvent, LocalModel, LocalStatus, StreamEvent, TranslationMetrics, UserSettings } from "./types";
@@ -9,7 +9,7 @@ import "./styles.css";
 
 const SETTINGS_KEY = "lat.settings.v1";
 const DOWNLOAD_MODEL = "hy-mt2-7b:q6_k";
-const DEFAULT_SETTINGS: UserSettings = { theme: "dark", layout: "horizontal", autoFont: true, removeLineBreaks: false, dataDirectory: "" };
+const DEFAULT_SETTINGS: UserSettings = { theme: "light", layout: "horizontal", autoFont: true, removeLineBreaks: false, dataDirectory: "" };
 
 const mathJaxConfig = {
   tex: { inlineMath: [["$", "$"], ["\\(", "\\)"]], displayMath: [["$$", "$$"], ["\\[", "\\]"]], processEscapes: true },
@@ -42,6 +42,8 @@ interface DownloadState {
   phase: string;
   status: string;
   error: string;
+  speedMiB: number;
+  cancelRequested: boolean;
   environment: DownloadEnvironment | null;
 }
 
@@ -49,12 +51,13 @@ function LanguageSelect({ value, onChange }: { value: string; onChange: (value: 
   return <select value={value} onChange={(event) => onChange(event.target.value)}>{LANGUAGES.map((language) => <option key={language.code} value={language.code}>{language.label} · {language.name}</option>)}</select>;
 }
 
-function ModelSelector({ status, selectedModel, loading, dataDirectory, onSelect, onEnable, onDownload, onChooseDirectory, onRefresh, download }: {
-  status: LocalStatus | null; selectedModel: string; loading: boolean; dataDirectory: string;
-  onSelect: (value: string) => void; onEnable: () => void; onDownload: () => void; onChooseDirectory: () => void; onRefresh: () => void; download: DownloadState;
+function ModelSelector({ status, selectedModel, loading, dataDirectory, defaultDataDirectory, directoryDraft, customDirectoryOpen, onSelect, onEnable, onDownload, onCancelDownload, onOpenCustomDirectory, onDirectoryDraftChange, onApplyDirectory, onChooseDirectory, onRefresh, download }: {
+  status: LocalStatus | null; selectedModel: string; loading: boolean; dataDirectory: string; defaultDataDirectory: string; directoryDraft: string; customDirectoryOpen: boolean;
+  onSelect: (value: string) => void; onEnable: () => void; onDownload: () => void; onCancelDownload: () => void; onOpenCustomDirectory: () => void; onDirectoryDraftChange: (value: string) => void; onApplyDirectory: () => void; onChooseDirectory: () => void; onRefresh: () => void; download: DownloadState;
 }) {
   const models = status?.models || [];
   const installed = models.some((model) => model.name === DOWNLOAD_MODEL);
+  const displayedDirectory = dataDirectory || defaultDataDirectory;
   return (
     <section className="select-screen">
       <img className="hero-icon" src="/lat-icon.svg" alt="LAT" />
@@ -62,17 +65,18 @@ function ModelSelector({ status, selectedModel, loading, dataDirectory, onSelect
       <h1>选择本地模型</h1>
       <p className="subtitle">模型不会离开本机 启用后即可进入 LAT 翻译工作区</p>
       <div className="service-pill"><span className={"status-dot " + (status?.runtime?.installed ? "ready" : "")} />{status?.runtime?.installed ? "llama.cpp " + (status.version || "已安装") : "需要安装 llama.cpp"}<button className="text-button" onClick={onRefresh}>刷新</button></div>
-      <div className="directory-card"><div><strong>LAT 数据目录</strong><small>{dataDirectory || "未选择 将使用应用目录下的 .lat-runtime"}</small></div><button className="secondary-button" onClick={onChooseDirectory}>选择目录</button></div>
       <div className="model-list">
         {models.map((model) => <button key={model.name} className={"model-card " + (selectedModel === model.name ? "selected" : "")} onClick={() => onSelect(model.name)}><span className="model-icon">◈</span><span className="model-copy"><strong>{modelLabel(model)}</strong><small>{formatBytes(model.size)} · GGUF</small></span><span className="model-check">{selectedModel === model.name ? "✓" : ""}</span></button>)}
       </div>
       {!models.length && <div className="empty-card">没有发现已安装模型 请先下载 Hy-MT2 Q6_K</div>}
       {!installed && <div className="download-card">
-        <div className="download-card-header"><div><strong>安装 llama.cpp 并下载 Hy-MT2 Q6_K</strong><small>运行时和模型会保存到上方目录</small></div><span className="download-icon">↓</span></div>
-        {download.environment && <div className={"environment-note " + download.environment.status}><strong>{download.environment.message}</strong>{download.environment.best_gpu && <small>{download.environment.best_gpu.name} · 总显存 {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB · 可用 {download.environment.best_gpu.free_vram_gib.toFixed(2)} GiB</small>}{download.environment.suggestion && <span>{download.environment.suggestion}</span>}</div>}
+        <div className="download-card-header"><div><strong>安装 llama.cpp 并下载 Hy-MT2 Q6_K</strong><small>运行时和模型会保存到本机数据目录</small></div></div>
+        {download.environment && <div className={"environment-note " + download.environment.status}><strong>{download.environment.message}</strong>{download.environment.best_gpu && <small>{download.environment.best_gpu.name} · 总显存 {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB</small>}{download.environment.suggestion && <span>{download.environment.suggestion}</span>}</div>}
         {download.error && <div className="error-banner">{download.error}</div>}
-        {download.busy && <div className="download-progress"><div className="download-progress-label"><span>{download.phase ? download.phase + " · " : ""}{download.status || "准备下载"}</span><span>{download.percent.toFixed(1)}%</span></div><div className="progress-track"><span style={{ width: Math.max(2, download.percent) + "%" }} /></div></div>}
-        <button className="secondary-button download-button" disabled={loading || download.busy} onClick={onDownload}>{download.busy ? "正在安装或下载…" : "检测环境并开始"}</button>
+        {download.busy && <div className="download-progress"><div className="download-progress-label"><span>{download.phase ? download.phase + " · " : ""}{download.status || "准备下载"}</span><span>{download.percent.toFixed(1)}% · {download.speedMiB.toFixed(2)} MiB/s</span></div><div className="progress-track"><span style={{ width: Math.max(2, download.percent) + "%" }} /></div></div>}
+        <div className="download-action-row"><button className="secondary-button download-button" disabled={loading || download.busy} onClick={onDownload}>检测环境并开始</button>{download.busy && download.phase && <button className="cancel-button" disabled={download.cancelRequested} onClick={onCancelDownload}>{download.cancelRequested ? "正在停止…" : "终止下载"}</button>}</div>
+        <button className="custom-directory-toggle" disabled={loading || download.busy} onClick={onOpenCustomDirectory}>{customDirectoryOpen ? "收起自定义模型路径" : "自定义模型路径"}</button>
+        {customDirectoryOpen && <div className="custom-directory-panel"><div className="directory-input-row"><input className="directory-input" value={directoryDraft} placeholder={defaultDataDirectory || ".lat-runtime"} disabled={loading || download.busy} onChange={(event) => onDirectoryDraftChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onApplyDirectory(); }} aria-label="自定义模型路径" /><button className="folder-button" disabled={loading || download.busy} onClick={onChooseDirectory} aria-label="选择模型目录" title="选择目录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l1.7 2h9.3v9.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2z" /><path d="M3.5 6.5V5.8a1.3 1.3 0 0 1 1.3-1.3h4.2l1.6 2h8.7a1.2 1.2 0 0 1 1.2 1.2v.8" /></svg></button></div><div className="custom-directory-footer"><small>{displayedDirectory ? "当前目录 " + displayedDirectory : "默认目录为安装路径下的 .lat-runtime"}</small><button className="text-button" disabled={loading || download.busy} onClick={onApplyDirectory}>应用路径</button></div></div>}
       </div>}
       {status?.warning && <div className="error-banner">{status.warning}</div>}
       <button className="primary-button enable-button" disabled={!selectedModel || loading || !models.length} onClick={onEnable}>{loading ? "正在启用模型…" : "启用模型"}</button>
@@ -80,7 +84,6 @@ function ModelSelector({ status, selectedModel, loading, dataDirectory, onSelect
     </section>
   );
 }
-
 function TextPane({ title, language, value, preview, fontSize, readOnly, onLanguageChange, onChange, onPreviewChange }: {
   title: string; language: string; value: string; preview: boolean; fontSize: number; readOnly?: boolean;
   onLanguageChange: (value: string) => void; onChange?: (value: string) => void; onPreviewChange: (value: boolean) => void;
@@ -143,7 +146,9 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState("");
   const [settings, setSettings] = useState<UserSettings>(readSettings);
   const [busy, setBusy] = useState(false);
-  const [download, setDownload] = useState<DownloadState>({ busy: false, percent: 0, phase: "", status: "", error: "", environment: null });
+  const [download, setDownload] = useState<DownloadState>({ busy: false, percent: 0, phase: "", status: "", error: "", speedMiB: 0, cancelRequested: false, environment: null });
+  const [customDirectoryOpen, setCustomDirectoryOpen] = useState(false);
+  const [directoryDraft, setDirectoryDraft] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }, [settings]);
@@ -167,22 +172,40 @@ export default function App() {
     })();
   }, []);
 
+  function openCustomDirectory() {
+    setDirectoryDraft(settings.dataDirectory || status?.runtime?.root_dir || ".lat-runtime");
+    setCustomDirectoryOpen(true);
+  }
+
+  async function applyDirectory(path = directoryDraft): Promise<boolean> {
+    const root = path.trim();
+    if (!root) {
+      setDownload((current) => ({ ...current, error: "模型路径不能为空" }));
+      return false;
+    }
+    try {
+      await setDataDirectory(root);
+      setDirectoryDraft(root);
+      setSettings((current) => ({ ...current, dataDirectory: root }));
+      await refresh();
+      setDownload((current) => ({ ...current, error: "" }));
+      return true;
+    } catch (reason) {
+      setDownload((current) => ({ ...current, error: reason instanceof Error ? reason.message : String(reason) }));
+      return false;
+    }
+  }
+
   async function chooseDirectory() {
     const selected = await selectDataDirectory();
-    if (!selected) return "";
-    await setDataDirectory(selected);
-    setSettings((current) => ({ ...current, dataDirectory: selected }));
-    const next = await refresh();
-    setStatus(next);
-    setScreen("select");
-    return selected;
+    if (selected) await applyDirectory(selected);
   }
 
   async function ensureDataDirectory(): Promise<boolean> {
-    if (settings.dataDirectory) return true;
-    return Boolean(await chooseDirectory());
+    const root = settings.dataDirectory || directoryDraft.trim() || status?.runtime?.root_dir || ".lat-runtime";
+    if (root === settings.dataDirectory && settings.dataDirectory) return true;
+    return applyDirectory(root);
   }
-
   async function enableSelectedModel() {
     setBusy(true); setError("");
     try { await loadModel(selectedModel); const next = await refresh(); setStatus(next); setScreen("translator"); }
@@ -197,8 +220,17 @@ export default function App() {
     finally { setBusy(false); }
   }
 
+  async function stopDownload() {
+    if (!download.busy || download.cancelRequested) return;
+    setDownload((current) => ({ ...current, cancelRequested: true, status: "正在请求停止" }));
+    try {
+      await cancelDownload();
+    } catch (reason) {
+      setDownload((current) => ({ ...current, cancelRequested: false, error: reason instanceof Error ? reason.message : String(reason) }));
+    }
+  }
   async function downloadHyModel() {
-    setBusy(true); setDownload({ busy: true, percent: 0, phase: "", status: "正在检测 GPU 显存", error: "", environment: null }); setError("");
+    setBusy(true); setDownload({ busy: true, percent: 0, phase: "", status: "正在检测 GPU 总显存", error: "", speedMiB: 0, cancelRequested: false, environment: null }); setError("");
     try {
       if (!await ensureDataDirectory()) { setDownload((current) => ({ ...current, busy: false, status: "已取消" })); return; }
       const environment = await getDownloadEnvironment();
@@ -207,21 +239,22 @@ export default function App() {
         const detail = [environment.message, environment.suggestion, "仍要继续下载吗？"].filter(Boolean).join("\n\n");
         if (!window.confirm(detail)) { setDownload((current) => ({ ...current, busy: false, status: "已取消" })); return; }
       }
-      await downloadModelStream(DOWNLOAD_MODEL, (event: DownloadEvent) => {
+      const outcome = await downloadModelStream(DOWNLOAD_MODEL, (event: DownloadEvent) => {
         if (event.type === "error") { setDownload((current) => ({ ...current, error: event.message || "模型下载失败" })); return; }
-        setDownload((current) => ({ ...current, phase: event.phase || current.phase, percent: event.percent ?? current.percent, status: event.status || current.status }));
+        setDownload((current) => ({ ...current, phase: event.phase || current.phase, percent: event.percent ?? current.percent, status: event.status || current.status, speedMiB: event.speed_mib_per_second ?? current.speedMiB, cancelRequested: event.status === "cancelled" ? false : current.cancelRequested }));
       });
+      if (outcome === "cancelled") { setDownload((current) => ({ ...current, status: "已取消", cancelRequested: false })); return; }
       await loadModel(DOWNLOAD_MODEL);
       const next = await refresh();
       setStatus(next); setSelectedModel(DOWNLOAD_MODEL); setScreen("translator");
     } catch (reason) { const message = reason instanceof Error ? reason.message : String(reason); setDownload((current) => ({ ...current, error: message })); }
-    finally { setBusy(false); setDownload((current) => ({ ...current, busy: false })); }
+    finally { setBusy(false); setDownload((current) => ({ ...current, busy: false, cancelRequested: false })); }
   }
 
   let content: ReactNode;
   if (screen === "loading") content = <section className="loading-screen"><div className="spinner" /><h1>正在启动本地服务</h1><p>检测 llama.cpp 和本地模型…</p></section>;
   else if (screen === "error") content = <section className="loading-screen"><div className="error-icon">!</div><h1>无法启动 LAT</h1><p>{error}</p><button className="primary-button" onClick={() => window.location.reload()}>重新连接</button></section>;
-  else if (screen === "select") content = <ModelSelector status={status} selectedModel={selectedModel} loading={busy} dataDirectory={settings.dataDirectory} onSelect={setSelectedModel} onEnable={enableSelectedModel} onDownload={() => void downloadHyModel()} onChooseDirectory={() => void chooseDirectory()} onRefresh={() => void refresh()} download={download} />;
+  else if (screen === "select") content = <ModelSelector status={status} selectedModel={selectedModel} loading={busy} dataDirectory={settings.dataDirectory} defaultDataDirectory={status?.runtime?.root_dir || ".lat-runtime"} directoryDraft={directoryDraft} customDirectoryOpen={customDirectoryOpen} onSelect={setSelectedModel} onEnable={enableSelectedModel} onDownload={() => void downloadHyModel()} onCancelDownload={() => void stopDownload()} onOpenCustomDirectory={openCustomDirectory} onDirectoryDraftChange={setDirectoryDraft} onApplyDirectory={() => void applyDirectory()} onChooseDirectory={() => void chooseDirectory()} onRefresh={() => void refresh()} download={download} />;
   else content = status ? <TranslatorWorkspace status={status} settings={settings} onSettingsChange={(next) => setSettings((current) => ({ ...current, ...next }))} onDisable={() => void disableModel()} /> : null;
 
   return <MathJaxContext version={3} config={mathJaxConfig} src="/mathjax/tex-chtml.js">{content}</MathJaxContext>;
