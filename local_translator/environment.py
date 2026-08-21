@@ -6,7 +6,7 @@ from typing import Any
 
 
 DOWNLOAD_MODEL = "hy-mt2-7b:q6_k"
-RECOMMENDED_VRAM_GIB = 8.0
+REQUIRED_VRAM_GIB = 10.0
 
 
 def _number(value: str) -> float | None:
@@ -60,7 +60,8 @@ def inspect_download_environment(model: str = DOWNLOAD_MODEL) -> dict[str, Any]:
     gpus = detect_nvidia_gpus()
     result: dict[str, Any] = {
         "model": model,
-        "recommended_vram_gib": RECOMMENDED_VRAM_GIB,
+        "recommended_vram_gib": REQUIRED_VRAM_GIB,
+        "required_vram_gib": REQUIRED_VRAM_GIB,
         "gpus": gpus,
         "status": "ready",
         "message": "GPU 显存满足 Hy-MT2 Q6_K 的建议配置",
@@ -71,7 +72,7 @@ def inspect_download_environment(model: str = DOWNLOAD_MODEL) -> dict[str, Any]:
             {
                 "status": "unknown",
                 "message": "未检测到 NVIDIA GPU 显存信息",
-                "suggestion": "可以继续下载 但建议先确认本机显存 或选择更小的 Q4/Q5 量化模型",
+                "suggestion": "请确认 NVIDIA 驱动和 nvidia-smi 可用 或改用更小模型",
             }
         )
         return result
@@ -80,20 +81,20 @@ def inspect_download_environment(model: str = DOWNLOAD_MODEL) -> dict[str, Any]:
     total = float(gpu["total_vram_gib"])
     free = float(gpu["free_vram_gib"])
     result["best_gpu"] = gpu
-    if total < RECOMMENDED_VRAM_GIB:
+    if total < REQUIRED_VRAM_GIB:
         result.update(
             {
                 "status": "insufficient",
-                "message": f"{gpu['name']} 只有 {total:.2f} GiB 显存 低于建议值 {RECOMMENDED_VRAM_GIB:.0f} GiB",
-                "suggestion": "建议改用 hy-mt2-7b:q4_k_m 或其他更小模型",
+                "message": f"{gpu['name']} 只有 {total:.2f} GiB 显存 低于建议值 {REQUIRED_VRAM_GIB:.0f} GiB",
+                "suggestion": "建议改用 Hy-MT2-1.8B 或更低量化模型",
             }
         )
-    elif free < RECOMMENDED_VRAM_GIB:
+    elif free < REQUIRED_VRAM_GIB:
         result.update(
             {
                 "status": "busy",
-                "message": f"当前可用显存 {free:.2f} GiB 低于建议值 {RECOMMENDED_VRAM_GIB:.0f} GiB",
-                "suggestion": "建议关闭占用 GPU 的程序 或先卸载其他 Ollama 模型",
+                "message": f"当前可用显存 {free:.2f} GiB 低于建议值 {REQUIRED_VRAM_GIB:.0f} GiB",
+                "suggestion": "建议关闭占用 GPU 的程序 或改用 Hy-MT2-1.8B",
             }
         )
     return result

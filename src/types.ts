@@ -7,6 +7,7 @@ export interface UserSettings {
   layout: LayoutMode;
   autoFont: boolean;
   removeLineBreaks: boolean;
+  dataDirectory: string;
 }
 
 export interface ModelDetails {
@@ -18,7 +19,7 @@ export interface ModelDetails {
   context_length?: number;
 }
 
-export interface OllamaModel {
+export interface LocalModel {
   name: string;
   model?: string;
   size?: number;
@@ -27,16 +28,32 @@ export interface OllamaModel {
   capabilities?: string[];
 }
 
-export interface OllamaStatus {
-  ollama_url: string;
+export interface RuntimeStatus {
+  installed: boolean;
+  verified: boolean;
+  variant?: string;
+  root_dir?: string;
+}
+
+export interface InstalledModelStatus {
+  installed: boolean;
+  verified: boolean;
+  path?: string;
+  size_bytes?: number;
+}
+
+export interface LocalStatus {
+  backend: "llama.cpp";
   ready: boolean;
   owned_process: boolean;
   model_configured: string;
   active_model?: string | null;
   resolved_model?: string;
   version?: string;
-  models?: OllamaModel[];
-  running_models?: OllamaModel[];
+  runtime?: RuntimeStatus;
+  model?: InstalledModelStatus;
+  models?: LocalModel[];
+  running_models?: LocalModel[];
   warning?: string;
 }
 
@@ -49,6 +66,7 @@ export interface GpuInfo {
 export interface DownloadEnvironment {
   model: string;
   recommended_vram_gib: number;
+  required_vram_gib?: number;
   gpus: GpuInfo[];
   best_gpu?: GpuInfo;
   status: "ready" | "busy" | "insufficient" | "unknown";
@@ -58,11 +76,13 @@ export interface DownloadEnvironment {
 
 export interface DownloadEvent {
   type: "download" | "error";
+  phase?: "runtime" | "model";
   status?: string;
   percent?: number;
   completed_bytes?: number;
   total_bytes?: number;
   digest?: string;
+  sha256?: string;
   message?: string;
 }
 

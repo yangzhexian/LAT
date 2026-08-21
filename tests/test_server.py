@@ -13,7 +13,12 @@ class ServerTests(unittest.TestCase):
     def setUp(self):
         settings = Settings(port=0)
         app = App(settings)
-        app.engine.translate = Mock(return_value=type("Result", (), {"text": "Hello", "model": "hy-mt2-7b:q6_k", "issues": []})())
+        app.engine.translate = Mock(return_value=type("Result", (), {"text": "Hello", "model": "hy-mt2-7b:q6_k", "issues": [], "metrics": None})())
+        app.engine.manager.install_stream = Mock(return_value=iter([
+            {"type": "download", "phase": "runtime", "status": "installed", "percent": 100},
+            {"type": "download", "phase": "model", "status": "downloading", "percent": 40, "total_bytes": 100, "completed_bytes": 40},
+            {"type": "download", "phase": "model", "status": "installed", "percent": 100},
+        ]))
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
         self.httpd.app = app
         app.httpd = self.httpd
@@ -38,28 +43,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(body["choices"][0]["message"]["content"], "Hello")
 
     def test_model_download_stream_reports_progress(self):
-        client = Mock()
-        client.tags.return_value = []
-        client.pull_stream.return_value = iter(
-            [
-                {"status": "pulling manifest"},
-                {"status": "downloading", "total": 100, "completed": 40},
-                {"status": "success"},
-            ]
-        )
-        self.httpd.app.engine.manager.ensure_server = Mock(return_value=client)
         request = urllib.request.Request(
             self.url + "/admin/download",
             data=json.dumps({"model": "hy-mt2-7b:q6_k"}).encode(),
             headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
             method="POST",
         )
-
         with urllib.request.urlopen(request) as response:
             body = response.read().decode()
-
-        self.assertIn('"status": "downloading"', body)
-        self.assertIn('"percent": 40.0', body)
+        self.assertIn('"phase": "model"', body)
+        self.assertIn('"percent": 40', body)
 
 
 if __name__ == "__main__":

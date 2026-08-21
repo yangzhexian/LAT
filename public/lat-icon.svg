@@ -31,7 +31,7 @@
   <rect x="17.5" y="17.5" width="477" height="477" rx="82.5" fill="none" stroke="#2A6382" stroke-opacity="0.36" stroke-width="3"/>
 
   <g id="monogram" transform="translate(10 7)">
-    <path fill="url(#blueT)" d="M234 160h166v43h-54v135l-40-64v-71h-45z"/>
+    <path fill="#FFFFFF" d="M234 160h166v43h-54v135l-40-64v-71h-45z"/>
     <path fill="url(#greenAccent)" d="M228 282l35 56h-70z"/>
     <path fill="#FFFFFF" d="M92 160h46v134h61.5882352941l-27.1764705882 44H92z"/>
     <path fill="#FFFFFF" d="M228 170l104 168h-48l-56-90-21 34h-49z"/>

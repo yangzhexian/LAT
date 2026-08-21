@@ -24,7 +24,7 @@ class EnvironmentTests(unittest.TestCase):
         result = inspect_download_environment()
 
         self.assertEqual(result["status"], "insufficient")
-        self.assertIn("q4", result["suggestion"])
+        self.assertIn("1.8B", result["suggestion"])
 
 
 if __name__ == "__main__":

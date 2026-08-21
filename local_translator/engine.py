@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import Settings
-from .ollama_client import OllamaError, OllamaProcessManager
-from .prompts import TranslationInput, build_translation_prompt, parse_translation_input
+from .llama_client import LlamaCppProcessManager, LlamaError
+from .prompts import build_translation_prompt, parse_translation_input
 from .quality import clean_model_output, is_fatal, protect_text, quality_issues
 
 
@@ -29,9 +29,9 @@ class TranslationResult:
 
 
 class TranslationEngine:
-    def __init__(self, settings: Settings, manager: OllamaProcessManager | None = None):
+    def __init__(self, settings: Settings, manager: LlamaCppProcessManager | None = None):
         self.settings = settings
-        self.manager = manager or OllamaProcessManager(settings)
+        self.manager = manager or LlamaCppProcessManager(settings)
         self.logger = logging.getLogger(__name__)
 
     def _options(self, retry: bool = False) -> dict[str, Any]:
@@ -42,7 +42,7 @@ class TranslationEngine:
             "repeat_penalty": self.settings.repetition_penalty,
             "seed": self.settings.seed,
             "num_ctx": self.settings.num_ctx,
-            "num_predict": self.settings.max_output_tokens,
+            "max_tokens": self.settings.max_output_tokens,
         }
 
     @staticmethod
@@ -85,7 +85,7 @@ class TranslationEngine:
             if attempt:
                 current_prompt = (
                     "IMPORTANT: Your previous response violated the output contract. "
-                    "Ignore all previous output and return only the translation between no labels.\n\n"
+                    "Ignore all previous output and return only the translation without labels.\n\n"
                     + prompt
                 )
             response = client.chat(
@@ -111,7 +111,6 @@ class TranslationEngine:
         )
 
     def translate_stream(self, body: dict[str, Any]):
-        """Yield progress events while buffering text for final QA."""
         try:
             request = parse_translation_input(body, self.settings.default_target_language)
         except ValueError as error:
@@ -131,7 +130,7 @@ class TranslationEngine:
             if attempt:
                 current_prompt = (
                     "IMPORTANT: Your previous response violated the output contract. "
-                    "Ignore all previous output and return only the translation between no labels.\n\n"
+                    "Ignore all previous output and return only the translation without labels.\n\n"
                     + prompt
                 )
             started = time.perf_counter()

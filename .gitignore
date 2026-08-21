@@ -1,8 +1,8 @@
-# Ollama content-addressed model blobs and manifests.
-models/ollama/
+# LAT runtime, downloads and local model data.
+models/
 
 # Local service logs and process metadata.
-.ollama-runtime/
+.lat-runtime/
 
 # Python cache and local configuration.
 __pycache__/
@@ -22,3 +22,6 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
+.ollama-runtime/
+*.gguf
+*.zip

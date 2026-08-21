@@ -23,7 +23,9 @@ fn gateway_is_ready() -> bool {
         .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:8787\r\nConnection: close\r\n\r\n");
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
-    response.contains("200") && response.contains("hy-mt2-local-translator")
+    response.contains("200")
+        && (response.contains("lat-local-translator")
+            || response.contains("hy-mt2-local-translator"))
 }
 
 fn request_gateway_shutdown() {
@@ -90,6 +92,7 @@ fn stop_gateway(app: tauri::AppHandle) -> Result<(), String> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(GatewayState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway])
         .setup(|app| {
