@@ -82,6 +82,10 @@ export interface DownloadEvent {
   total_bytes?: number;
   speed_bytes_per_second?: number;
   speed_mib_per_second?: number;
+  file_index?: number;
+  file_count?: number;
+  file_name?: string;
+  retry_count?: number;
   digest?: string;
   sha256?: string;
   message?: string;

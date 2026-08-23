@@ -84,7 +84,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .download-card-header strong { font-size: 14px; }
 .download-card-header small { color: var(--subtle); font-size: 12px; }
 .download-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 20%, var(--control)); color: var(--accent-soft); font-size: 20px; }
-.download-button { justify-self: start; padding: 9px 13px; }
+.download-button { justify-self: end; padding: 9px 13px; }
 .environment-note { display: grid; gap: 5px; padding: 10px 12px; border-radius: 9px; background: var(--control); color: var(--muted); font-size: 12px; }
 .environment-note strong { color: var(--text); font-size: 12px; }
 .environment-note small, .environment-note span { color: var(--subtle); }
@@ -146,7 +146,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .translator-screen { padding: 0 14px 12px; }
   .pane-header select { max-width: 170px; }
 }
-.download-action-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.download-action-row { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
 .cancel-button { border: 1px solid #b72f4d88; border-radius: 8px; padding: 9px 13px; background: transparent; color: #c33c59; font-size: 12px; font-weight: 700; }
 .cancel-button:hover { background: #b72f4d18; }
 .custom-directory-toggle { justify-self: start; border: 0; padding: 0; background: transparent; color: var(--subtle); font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }

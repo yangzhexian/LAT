@@ -1,5 +1,6 @@
 import hashlib
 import tempfile
+import urllib.error
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -44,6 +45,19 @@ class LlamaDownloadTests(unittest.TestCase):
         self.assertEqual(downloading["percent"], 100.0)
         self.assertIn("speed_mib_per_second", downloading)
 
+    def test_retries_after_connection_refused_and_resumes(self):
+        payload = b"runtime archive after reconnect"
+        asset = DownloadAsset("runtime", "https://example.invalid/runtime.zip", hashlib.sha256(payload).hexdigest())
+        with tempfile.TemporaryDirectory() as directory:
+            manager = LlamaCppProcessManager(Settings(runtime_root=directory))
+            destination = Path(directory) / "runtime.zip"
+            responses = [urllib.error.URLError("connection refused"), FakeResponse(payload)]
+            with patch("local_translator.llama_client.urllib.request.urlopen", side_effect=responses), patch("local_translator.llama_client.time.sleep"):
+                events = list(manager._download_asset(asset, destination, "runtime"))
+
+            self.assertTrue(destination.exists())
+            self.assertIn("retrying", [event["status"] for event in events])
+            self.assertEqual(events[-1]["status"], "verified")
 
 if __name__ == "__main__":
     unittest.main()

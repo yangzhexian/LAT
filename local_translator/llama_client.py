@@ -302,80 +302,155 @@ class LlamaCppProcessManager:
             return marker.read_text(encoding="utf-8").strip().lower() == expected_sha256.lower()
         return False
 
-    def _download_asset(self, asset: DownloadAsset, destination: Path, phase: str) -> Iterator[dict[str, Any]]:
+    def _download_asset(
+        self,
+        asset: DownloadAsset,
+        destination: Path,
+        phase: str,
+        file_index: int | None = None,
+        file_count: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
         destination.parent.mkdir(parents=True, exist_ok=True)
+        metadata = {
+            "file_index": file_index,
+            "file_count": file_count,
+            "file_name": asset.name,
+        }
+
+        def emit(status: str, **values: Any) -> dict[str, Any]:
+            return {"type": "download", "phase": phase, "status": status, **metadata, **values}
+
         if self._verified(destination, asset.size, asset.sha256):
             size = destination.stat().st_size
-            yield {"type": "download", "phase": phase, "status": "already_present", "percent": 100.0, "completed_bytes": size, "total_bytes": size, "speed_bytes_per_second": 0.0, "speed_mib_per_second": 0.0}
+            yield emit("already_present", percent=100.0, completed_bytes=size, total_bytes=size, speed_bytes_per_second=0.0, speed_mib_per_second=0.0)
             return
         if self.download_cancel_event.is_set():
             raise DownloadCancelled("下载已取消")
 
         partial = destination.with_suffix(destination.suffix + ".part")
-        current = partial.stat().st_size if partial.exists() else 0
-        headers = {"User-Agent": "LAT/0.1.1-beta.2"}
-        if current:
-            headers["Range"] = f"bytes={current}-"
-        request = urllib.request.Request(asset.url, headers=headers)
-        try:
-            response = urllib.request.urlopen(request, timeout=30.0)
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            if self.download_cancel_event.is_set():
-                raise DownloadCancelled("下载已取消") from error
-            raise LlamaError(f"下载 {asset.name} 失败: {error}") from error
-
-        status = getattr(response, "status", 200)
-        if current and status != 206:
-            current = 0
-            partial.unlink(missing_ok=True)
-        mode = "ab" if current else "wb"
         total_bytes = asset.size
-        if total_bytes is None:
-            try:
-                content_length = int(response.headers.get("Content-Length", "0"))
-            except (TypeError, ValueError):
-                content_length = 0
-            total_bytes = content_length + current if content_length else None
-
-        self.download_response = response
-        completed = current
         started = time.monotonic()
-        try:
-            with response, partial.open(mode) as handle:
-                yield {"type": "download", "phase": phase, "status": "connecting", "percent": round(completed * 100 / total_bytes, 1) if total_bytes else 0.0, "completed_bytes": completed, "total_bytes": total_bytes, "speed_bytes_per_second": 0.0, "speed_mib_per_second": 0.0}
-                while True:
-                    if self.download_cancel_event.is_set():
-                        raise DownloadCancelled("下载已取消 已保留已下载内容")
+        retry_count = 0
+        while True:
+            if self.download_cancel_event.is_set():
+                raise DownloadCancelled("下载已取消")
+            current = partial.stat().st_size if partial.exists() else 0
+            headers = {"User-Agent": "LAT/0.1.1-beta.3"}
+            if current:
+                headers["Range"] = f"bytes={current}-"
+            request = urllib.request.Request(asset.url, headers=headers)
+            try:
+                response = urllib.request.urlopen(request, timeout=30.0)
+                status_code = getattr(response, "status", 200)
+                if current and status_code != 206:
+                    current = 0
+                    partial.unlink(missing_ok=True)
+                mode = "ab" if current else "wb"
+                if total_bytes is None:
                     try:
-                        chunk = response.read(1024 * 1024)
-                    except (TimeoutError, socket.timeout, urllib.error.URLError, OSError, ValueError) as error:
-                        if self.download_cancel_event.is_set():
-                            raise DownloadCancelled("下载已取消 已保留已下载内容") from error
-                        raise LlamaError(f"下载 {asset.name} 响应超时或连接中断: {error}") from error
-                    if not chunk:
-                        break
-                    handle.write(chunk)
-                    completed += len(chunk)
-                    elapsed = max(time.monotonic() - started, 0.001)
-                    speed = completed / elapsed
-                    percent = min(100.0, completed * 100 / total_bytes) if total_bytes else 0.0
-                    yield {"type": "download", "phase": phase, "status": "downloading", "percent": round(percent, 1), "completed_bytes": completed, "total_bytes": total_bytes, "speed_bytes_per_second": round(speed, 1), "speed_mib_per_second": round(speed / (1024 * 1024), 3)}
-        finally:
-            self.download_response = None
+                        content_length = int(response.headers.get("Content-Length", "0"))
+                    except (TypeError, ValueError):
+                        content_length = 0
+                    if content_length:
+                        total_bytes = content_length + current
 
-        if self.download_cancel_event.is_set():
-            raise DownloadCancelled("下载已取消 已保留已下载内容")
-        if asset.size is not None and completed != asset.size:
-            raise LlamaError(f"{asset.name} 下载不完整: {completed}/{asset.size} bytes")
-        digest = self._sha256(partial)
-        if digest.lower() != asset.sha256.lower():
-            partial.unlink(missing_ok=True)
-            raise LlamaError(f"{asset.name} SHA-256 校验失败")
-        os.replace(partial, destination)
-        destination.with_suffix(destination.suffix + ".sha256").write_text(asset.sha256, encoding="utf-8")
-        elapsed = max(time.monotonic() - started, 0.001)
-        speed = completed / elapsed
-        yield {"type": "download", "phase": phase, "status": "verified", "percent": 100.0, "completed_bytes": completed, "total_bytes": total_bytes or completed, "speed_bytes_per_second": round(speed, 1), "speed_mib_per_second": round(speed / (1024 * 1024), 3), "sha256": digest}
+                self.download_response = response
+                completed = current
+                try:
+                    with response, partial.open(mode) as handle:
+                        yield emit(
+                            "connecting",
+                            percent=round(completed * 100 / total_bytes, 1) if total_bytes else 0.0,
+                            completed_bytes=completed,
+                            total_bytes=total_bytes,
+                            speed_bytes_per_second=round(completed / max(time.monotonic() - started, 0.001), 1),
+                            speed_mib_per_second=round(completed / max(time.monotonic() - started, 0.001) / (1024 * 1024), 3),
+                            retry_count=retry_count,
+                        )
+                        while True:
+                            if self.download_cancel_event.is_set():
+                                raise DownloadCancelled("下载已取消 已保留已下载内容")
+                            try:
+                                chunk = response.read(1024 * 1024)
+                            except (TimeoutError, socket.timeout, urllib.error.URLError, OSError, ValueError) as error:
+                                if self.download_cancel_event.is_set():
+                                    raise DownloadCancelled("下载已取消 已保留已下载内容") from error
+                                raise LlamaError(f"下载 {asset.name} 响应中断: {error}") from error
+                            if not chunk:
+                                break
+                            handle.write(chunk)
+                            completed += len(chunk)
+                            elapsed = max(time.monotonic() - started, 0.001)
+                            speed = completed / elapsed
+                            percent = min(100.0, completed * 100 / total_bytes) if total_bytes else 0.0
+                            yield emit(
+                                "downloading",
+                                percent=round(percent, 1),
+                                completed_bytes=completed,
+                                total_bytes=total_bytes,
+                                speed_bytes_per_second=round(speed, 1),
+                                speed_mib_per_second=round(speed / (1024 * 1024), 3),
+                                retry_count=retry_count,
+                            )
+                finally:
+                    self.download_response = None
+
+                if self.download_cancel_event.is_set():
+                    raise DownloadCancelled("下载已取消 已保留已下载内容")
+                completed = partial.stat().st_size
+                if asset.size is not None and completed != asset.size:
+                    raise LlamaError(f"下载提前结束 {completed}/{asset.size} bytes")
+                if total_bytes is not None and completed < total_bytes:
+                    raise LlamaError(f"下载提前结束 {completed}/{total_bytes} bytes")
+                digest = self._sha256(partial)
+                if digest.lower() != asset.sha256.lower():
+                    raise LlamaError("SHA-256 校验失败 下载内容可能不完整")
+                os.replace(partial, destination)
+                destination.with_suffix(destination.suffix + ".sha256").write_text(asset.sha256, encoding="utf-8")
+                elapsed = max(time.monotonic() - started, 0.001)
+                speed = completed / elapsed
+                yield emit(
+                    "verified",
+                    percent=100.0,
+                    completed_bytes=completed,
+                    total_bytes=total_bytes or completed,
+                    speed_bytes_per_second=round(speed, 1),
+                    speed_mib_per_second=round(speed / (1024 * 1024), 3),
+                    sha256=digest,
+                    retry_count=retry_count,
+                )
+                return
+            except DownloadCancelled:
+                self.download_response = None
+                raise
+            except urllib.error.HTTPError as error:
+                self.download_response = None
+                if error.code < 500:
+                    raise LlamaError(f"下载 {asset.name} 失败 HTTP {error.code}") from error
+                failure: Exception = error
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, LlamaError) as error:
+                self.download_response = None
+                failure = error
+
+            if retry_count >= 5:
+                raise LlamaError(f"下载 {asset.name} 失败 已重试 {retry_count} 次: {failure}") from failure
+            retry_count += 1
+            delay = min(8.0, 1.5 * (2 ** (retry_count - 1)))
+            LOGGER.warning("download %s interrupted, retry %s/%s in %.1fs: %s", asset.name, retry_count, 5, delay, failure)
+            yield emit(
+                "retrying",
+                percent=round(current * 100 / total_bytes, 1) if total_bytes else 0.0,
+                completed_bytes=current,
+                total_bytes=total_bytes,
+                speed_bytes_per_second=round(current / max(time.monotonic() - started, 0.001), 1),
+                speed_mib_per_second=round(current / max(time.monotonic() - started, 0.001) / (1024 * 1024), 3),
+                retry_count=retry_count,
+                message=f"网络波动 正在重试 {retry_count}/5",
+            )
+            for _ in range(max(1, round(delay * 10))):
+                if self.download_cancel_event.is_set():
+                    raise DownloadCancelled("下载已取消 已保留已下载内容")
+                time.sleep(0.1)
 
     def _extract_runtime(self, archives: list[Path]) -> None:
         stage = Path(tempfile.mkdtemp(prefix="lat-llama-", dir=str(self.settings.resolved_data_root)))
@@ -408,22 +483,25 @@ class LlamaCppProcessManager:
         self.download_cancel_event.clear()
         try:
             self.settings.resolved_data_root.mkdir(parents=True, exist_ok=True)
+            assets = self.runtime_assets
+            file_count = len(assets) + 1
             if self._server_executable() is None:
                 archives: list[Path] = []
-                for asset in self.runtime_assets:
+                for index, asset in enumerate(assets, start=1):
                     archive = self.settings.resolved_data_root / "downloads" / f"{asset.name}.zip"
                     archives.append(archive)
-                    yield from self._download_asset(asset, archive, "runtime")
+                    yield from self._download_asset(asset, archive, "runtime", index, file_count)
                 self._extract_runtime(archives)
-                yield {"type": "download", "phase": "runtime", "status": "installed", "percent": 100.0}
+                yield {"type": "download", "phase": "runtime", "status": "installed", "percent": 100.0, "file_index": len(assets), "file_count": file_count, "file_name": "llama.cpp runtime"}
             else:
-                yield {"type": "download", "phase": "runtime", "status": "already_present", "percent": 100.0}
+                yield {"type": "download", "phase": "runtime", "status": "already_present", "percent": 100.0, "file_index": len(assets), "file_count": file_count, "file_name": "llama.cpp runtime"}
 
             model_asset = DownloadAsset(MODEL_FILENAME, MODEL_URL, MODEL_SHA256, MODEL_SIZE)
-            yield from self._download_asset(model_asset, self.settings.resolved_model_path, "model")
-            yield {"type": "download", "phase": "model", "status": "installed", "percent": 100.0}
+            yield from self._download_asset(model_asset, self.settings.resolved_model_path, "model", file_count, file_count)
+            yield {"type": "download", "phase": "model", "status": "installed", "percent": 100.0, "file_index": file_count, "file_count": file_count, "file_name": MODEL_FILENAME}
         finally:
             self.download_lock.release()
+
     def _choose_port(self) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
