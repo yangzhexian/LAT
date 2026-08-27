@@ -21,7 +21,7 @@ LAT 是一个面向 Windows 的本地 AI 翻译桌面应用。它基于 Tauri 2�
 - 明暗主题切换
 - LaTeX 文本预览，支持 $...$、$$...$$、\(...\) 和 \[...\]
 - LaTeX 预览使用本地 MathJax 和 Times New Roman 风格字体
-- 实时显示翻译进度、tokens/s 和生成 token 数
+- 实时显示翻译进度和 tokens/s（每秒刷新一次），完成后保留速度、耗时和生成 token 数
 - 关闭模型时停止 llama-server 并释放显存
 - 关闭应用或卸载应用时清理 gateway 和 llama-server 进程
 - 为 nextai-translator 提供 OpenAI 兼容接口
@@ -96,13 +96,13 @@ python -m pip install pyinstaller
 npm run tauri build
 ~~~
 
-当前 Beta 安装包版本为 0.1.1-beta.4。生成文件位于：
+当前 Beta 安装包版本为 0.1.1-beta.5。生成文件位于：
 
 ~~~text
 src-tauri/target/release/bundle/nsis/
 ~~~
 
-构建过程会生成不纳入 Git 的 sidecar、Tauri target、前端 dist 和 MathJax 运行时文件。
+构建过程会生成不纳入 Git 的 sidecar、Tauri target、前端 dist 和 MathJax 运行时文件。卸载或更新时会询问是否删除模型、llama.cpp 运行时、下载缓存和日志，默认保留这些数据。
 
 ## Runtime and model storage
 

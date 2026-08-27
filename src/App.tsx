@@ -108,6 +108,8 @@ function TranslatorWorkspace({ status, settings, onSettingsChange, onDisable }: 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [progress, setProgress] = useState<StreamEvent | null>(null);
   const [metrics, setMetrics] = useState<TranslationMetrics | null>(null);
+  const progressRef = useRef<StreamEvent | null>(null);
+  const progressUpdatedAtRef = useRef(0);
   const [message, setMessage] = useState("准备就绪");
   const sourceFontSize = useAutoFontSize(source, settings.autoFont);
   const targetFontSize = useAutoFontSize(translation, settings.autoFont);
@@ -123,13 +125,20 @@ function TranslatorWorkspace({ status, settings, onSettingsChange, onDisable }: 
 
   async function translate() {
     if (!source.trim() || busy) return;
-    setBusy(true); setTranslation(""); setMetrics(null); setProgress(null); setMessage("模型正在生成译文…");
+    setBusy(true); setTranslation(""); setMetrics(null); setProgress(null); progressRef.current = null; progressUpdatedAtRef.current = 0; setMessage("模型正在生成译文…");
     try {
       const normalized = normalizeForTranslation(source, settings.removeLineBreaks);
       await translateStream({ text: normalized, source_language: sourceName, target_language: targetName }, (event) => {
-        setProgress(event);
-        if (event.type === "retry") setMessage("正在安全重试");
-        if (event.type === "complete") { setTranslation(event.translation || ""); setMetrics(event.metrics || null); setMessage(event.quality_issues?.length ? "完成 存在质量提示" : "翻译完成"); }
+        if (event.type === "progress") {
+          progressRef.current = event;
+          const now = Date.now();
+          if (progressUpdatedAtRef.current === 0 || now - progressUpdatedAtRef.current >= 1000) {
+            progressUpdatedAtRef.current = now;
+            setProgress(event);
+          }
+        }
+        if (event.type === "retry") { progressRef.current = null; progressUpdatedAtRef.current = 0; setProgress(null); setMessage("正在安全重试"); }
+        if (event.type === "complete") { const completedTokens = typeof event.metrics?.generated_tokens === "number" ? " · " + event.metrics.generated_tokens + " tokens" : ""; setTranslation(event.translation || ""); setMetrics(event.metrics || null); setMessage((event.quality_issues?.length ? "完成 存在质量提示" : "翻译完成") + completedTokens); }
         if (event.type === "error") setMessage(event.message || "翻译失败");
       });
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
@@ -137,7 +146,11 @@ function TranslatorWorkspace({ status, settings, onSettingsChange, onDisable }: 
 
   const speed = progress?.tokens_per_second?.toFixed(2) || "0.00";
   const elapsed = progress?.elapsed_ms ? (progress.elapsed_ms / 1000).toFixed(1) + "s" : "准备中";
-  const doneMetrics = metrics?.tokens_per_second ? metrics.tokens_per_second.toFixed(2) + " tokens/s · " + (metrics.generated_tokens || 0) + " tokens" : "";
+  const doneMetrics = metrics ? [
+    metrics.tokens_per_second != null ? metrics.tokens_per_second.toFixed(2) + " tokens/s" : "",
+    metrics.elapsed_ms != null ? (metrics.elapsed_ms / 1000).toFixed(1) + "s" : "",
+    metrics.generated_tokens != null ? metrics.generated_tokens + " tokens" : "",
+  ].filter(Boolean).join(" · ") : "";
 
   return <main className="translator-screen"><header className="app-header"><div className="brand"><span>Local AI Translator</span></div><div className="active-model"><span className="status-dot ready" />{status.active_model || status.resolved_model || status.model_configured}</div><button className="secondary-button" onClick={() => setSettingsOpen(true)}>设置</button><button className="secondary-button danger-button" onClick={onDisable}>关闭模型</button></header><div className="workspace-status">{busy ? "生成中 " + (progress?.estimated_tokens || 0) + " tokens" : message}</div><div className={"workspace " + settings.layout}><TextPane title="原文" language={sourceLanguage} value={source} preview={sourcePreview} fontSize={sourceFontSize} onLanguageChange={setSourceLanguage} onChange={setSource} onPreviewChange={setSourcePreview} /><div className="swap-column"><button className="swap-button" disabled={!canSwap || busy} onClick={swapLanguages} title="交换语言和内容">⇄</button></div><TextPane title="译文" language={targetLanguage} value={translation} preview={targetPreview} fontSize={targetFontSize} readOnly onLanguageChange={setTargetLanguage} onPreviewChange={setTargetPreview} /></div><footer className="translation-footer"><div className="progress-copy">{busy ? speed + " tokens/s · " + elapsed : doneMetrics}</div><button className="primary-button translate-button" disabled={busy || !source.trim()} onClick={translate}>{busy ? "翻译中…" : "开始翻译"}<span>Ctrl ↵</span></button></footer>{settingsOpen && <SettingsPanel settings={settings} onChange={onSettingsChange} onClose={() => setSettingsOpen(false)} />}</main>;
 }

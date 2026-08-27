@@ -339,7 +339,7 @@ class LlamaCppProcessManager:
             if self.download_cancel_event.is_set():
                 raise DownloadCancelled("下载已取消")
             current = partial.stat().st_size if partial.exists() else 0
-            headers = {"User-Agent": "LAT/0.1.1-beta.4"}
+            headers = {"User-Agent": "LAT/0.1.1-beta.5"}
             if current:
                 headers["Range"] = f"bytes={current}-"
             request = urllib.request.Request(asset.url, headers=headers)
