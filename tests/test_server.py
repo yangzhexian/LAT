@@ -18,6 +18,7 @@ class ServerTests(unittest.TestCase):
             {"type": "download", "phase": "runtime", "status": "installed", "percent": 100},
             {"type": "download", "phase": "model", "status": "downloading", "percent": 40, "total_bytes": 100, "completed_bytes": 40},
             {"type": "download", "phase": "model", "status": "installed", "percent": 100},
+            {"type": "download", "phase": "model", "status": "complete", "percent": 100},
         ]))
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
         self.httpd.app = app
@@ -63,6 +64,7 @@ class ServerTests(unittest.TestCase):
             body = response.read().decode()
         self.assertIn('"phase": "model"', body)
         self.assertIn('"percent": 40', body)
+        self.assertIn('"status": "complete"', body)
 
 
 if __name__ == "__main__":

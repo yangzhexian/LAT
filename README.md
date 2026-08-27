@@ -96,7 +96,7 @@ python -m pip install pyinstaller
 npm run tauri build
 ~~~
 
-当前 Beta 安装包版本为 0.1.1-beta.3。生成文件位于：
+当前 Beta 安装包版本为 0.1.1-beta.4。生成文件位于：
 
 ~~~text
 src-tauri/target/release/bundle/nsis/
@@ -116,7 +116,7 @@ D:\Tools\LAT\data\
 └─ logs\
 ~~~
 
-模型文件来自 Tencent-Hunyuan/Hy-MT2-7B-GGUF，运行时来自 llama.cpp Releases。下载会进行断点续传、SHA-256 校验和原子安装。
+模型文件默认来自 Tencent 官方 Hugging Face 仓库，主源不可用时会自动切换到 hf-mirror.com。两个地址都会使用同一个官方 SHA-256 校验值，运行时来自 llama.cpp Releases。下载会进行断点续传、SHA-256 校验和原子安装。ModelScope 上也存在 Unsloth 发布的 Q6_K 文件，但其 SHA-256 与 Tencent 官方文件不同，当前不会将其静默当作同一模型。
 
 ## Configuration
 
@@ -244,7 +244,7 @@ docs(readme): document Ollama-free setup
 
 旧版本的运行时压缩包没有声明预估大小，前端因此只能显示 0.0%。新版本会从响应头读取运行时文件总大小并显示当前文件/总文件数量、百分比和 MiB/s。下载过程会保留 `.part` 文件，遇到 WinError 10061、超时或连接中断时会自动断点重连并最多重试 5 次。
 
-下载卡片中的“终止下载”会通知网关停止当前任务并保留 `.part` 文件；如果应用需要立即退出，也可以直接关闭窗口，Tauri 会先请求网关停止，再结束 sidecar。下次启动时可以重新点击下载，已完成的临时文件会继续复用。
+下载卡片中的“终止下载”会通知网关停止当前任务并保留 `.part` 文件；如果应用需要立即退出，也可以直接关闭窗口，Tauri 会先请求网关停止，再结束 sidecar。下次启动时可以重新点击下载，已完成的临时文件会继续复用。模型下载完成后还必须收到“全部文件下载并校验完成”事件，并通过运行时和模型 SHA-256 校验，LAT 才会启动模型。主下载源连接失败时会自动切换到 hf-mirror.com。
 ### GPU 显存警告
 
 Hy-MT2-7B Q6_K 权重约 6.16 GB，LAT 预检使用 GPU 总显存而不是当前可用显存。总显存低于 10 GiB 时建议改用更小的 Hy-MT2 模型。

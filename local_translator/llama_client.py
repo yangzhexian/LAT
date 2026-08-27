@@ -25,6 +25,10 @@ LOGGER = logging.getLogger(__name__)
 MODEL_ID = "hy-mt2-7b:q6_k"
 MODEL_FILENAME = "HY-MT2-7B-Q6_K.gguf"
 MODEL_URL = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/HY-MT2-7B-Q6_K.gguf?download=true"
+MODEL_URLS = (
+    MODEL_URL,
+    "https://hf-mirror.com/tencent/Hy-MT2-7B-GGUF/resolve/main/HY-MT2-7B-Q6_K.gguf?download=true",
+)
 MODEL_SIZE = 6_164_482_720
 MODEL_SHA256 = "88ef0aba59952a4cfe4be36cb5baf797dbb370bc60e9dcbd7297036021e52831"
 RUNTIME_ASSETS: dict[str, tuple[dict[str, str], ...]] = {
@@ -335,7 +339,7 @@ class LlamaCppProcessManager:
             if self.download_cancel_event.is_set():
                 raise DownloadCancelled("下载已取消")
             current = partial.stat().st_size if partial.exists() else 0
-            headers = {"User-Agent": "LAT/0.1.1-beta.3"}
+            headers = {"User-Agent": "LAT/0.1.1-beta.4"}
             if current:
                 headers["Range"] = f"bytes={current}-"
             request = urllib.request.Request(asset.url, headers=headers)
@@ -452,6 +456,47 @@ class LlamaCppProcessManager:
                     raise DownloadCancelled("下载已取消 已保留已下载内容")
                 time.sleep(0.1)
 
+    def _download_model(
+        self,
+        destination: Path,
+        file_index: int,
+        file_count: int,
+    ) -> Iterator[dict[str, Any]]:
+        last_error: LlamaError | None = None
+        for source_index, url in enumerate(MODEL_URLS):
+            asset = DownloadAsset(MODEL_FILENAME, url, MODEL_SHA256, MODEL_SIZE)
+            try:
+                yield from self._download_asset(asset, destination, "model", file_index, file_count)
+                return
+            except DownloadCancelled:
+                raise
+            except LlamaError as error:
+                last_error = error
+                if source_index >= len(MODEL_URLS) - 1:
+                    raise
+                destination.with_suffix(destination.suffix + ".part").unlink(missing_ok=True)
+                LOGGER.warning(
+                    "model source failed, switching source %s/%s: %s",
+                    source_index + 1,
+                    len(MODEL_URLS),
+                    error,
+                )
+                yield {
+                    "type": "download",
+                    "phase": "model",
+                    "status": "switching_source",
+                    "percent": 0.0,
+                    "completed_bytes": 0,
+                    "total_bytes": MODEL_SIZE,
+                    "file_index": file_index,
+                    "file_count": file_count,
+                    "file_name": MODEL_FILENAME,
+                    "message": f"当前下载源不可用 正在切换备用源 {source_index + 2}/{len(MODEL_URLS)}",
+                }
+        if last_error is not None:
+            raise last_error
+        raise LlamaError("没有可用的模型下载源")
+
     def _extract_runtime(self, archives: list[Path]) -> None:
         stage = Path(tempfile.mkdtemp(prefix="lat-llama-", dir=str(self.settings.resolved_data_root)))
         try:
@@ -496,9 +541,11 @@ class LlamaCppProcessManager:
             else:
                 yield {"type": "download", "phase": "runtime", "status": "already_present", "percent": 100.0, "file_index": len(assets), "file_count": file_count, "file_name": "llama.cpp runtime"}
 
-            model_asset = DownloadAsset(MODEL_FILENAME, MODEL_URL, MODEL_SHA256, MODEL_SIZE)
-            yield from self._download_asset(model_asset, self.settings.resolved_model_path, "model", file_count, file_count)
+            yield from self._download_model(self.settings.resolved_model_path, file_count, file_count)
+            if not self._verified(self.settings.resolved_model_path, MODEL_SIZE, MODEL_SHA256):
+                raise LlamaError("模型下载完成但校验未通过")
             yield {"type": "download", "phase": "model", "status": "installed", "percent": 100.0, "file_index": file_count, "file_count": file_count, "file_name": MODEL_FILENAME}
+            yield {"type": "download", "phase": "model", "status": "complete", "percent": 100.0, "file_index": file_count, "file_count": file_count, "file_name": MODEL_FILENAME, "message": "全部文件下载并校验完成"}
         finally:
             self.download_lock.release()
 
@@ -590,7 +637,7 @@ class LlamaCppProcessManager:
                 "root_dir": str(self.settings.resolved_data_root),
             },
             "model": {
-                "installed": model.exists() and model.stat().st_size == MODEL_SIZE,
+                "installed": self._verified(model, MODEL_SIZE, MODEL_SHA256),
                 "verified": self._verified(model, MODEL_SIZE, MODEL_SHA256),
                 "path": str(model),
                 "size_bytes": MODEL_SIZE,

@@ -59,7 +59,7 @@ function ModelSelector({ status, selectedModel, loading, dataDirectory, defaultD
   onSelect: (value: string) => void; onEnable: () => void; onDownload: () => void; onCancelDownload: () => void; onOpenCustomDirectory: () => void; onDirectoryDraftChange: (value: string) => void; onApplyDirectory: () => void; onChooseDirectory: () => void; onRefresh: () => void; download: DownloadState;
 }) {
   const models = status?.models || [];
-  const installed = models.some((model) => model.name === DOWNLOAD_MODEL);
+  const installed = Boolean(status?.model?.verified);
   const displayedDirectory = dataDirectory || defaultDataDirectory;
   return (
     <section className="select-screen">
@@ -77,8 +77,7 @@ function ModelSelector({ status, selectedModel, loading, dataDirectory, defaultD
         {download.environment && <div className={"environment-note " + download.environment.status}><strong>{download.environment.message}</strong>{download.environment.best_gpu && <small>{download.environment.best_gpu.name} · 总显存 {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB</small>}{download.environment.suggestion && <span>{download.environment.suggestion}</span>}</div>}
         {download.error && <div className="error-banner">{download.error}</div>}
         {download.busy && <div className="download-progress"><div className="download-progress-label"><span>{download.phase ? download.phase + " · " : ""}{download.status || "准备下载"}{download.fileName ? " · " + download.fileName : ""}</span><span>{download.fileCount > 0 ? "共 " + download.fileCount + " 项 · " : ""}{download.percent.toFixed(1)}% · {download.speedMiB.toFixed(2)} MiB/s</span></div><div className="progress-track"><span style={{ width: Math.max(2, download.percent) + "%" }} /></div></div>}
-        <div className="download-action-row"><button className={download.busy ? "cancel-button" : "secondary-button download-button"} disabled={download.cancelRequested} onClick={download.busy ? onCancelDownload : onDownload}>{download.busy ? (download.cancelRequested ? "正在停止…" : "终止下载") : "开始下载"}</button></div>
-        <button className="custom-directory-toggle" disabled={loading || download.busy} onClick={onOpenCustomDirectory}>{customDirectoryOpen ? "收起自定义模型路径" : "自定义模型路径"}</button>
+        <div className="download-action-row"><button className="custom-directory-toggle" disabled={loading || download.busy} onClick={onOpenCustomDirectory}>{customDirectoryOpen ? "收起自定义模型路径" : "自定义模型路径"}</button><button className={download.busy ? "cancel-button" : "secondary-button download-button"} disabled={download.cancelRequested} onClick={download.busy ? onCancelDownload : onDownload}>{download.busy ? (download.cancelRequested ? "正在停止…" : "终止下载") : "开始下载"}</button></div>
         {customDirectoryOpen && <div className="custom-directory-panel"><div className="directory-input-row"><input className="directory-input" value={directoryDraft} placeholder={defaultDataDirectory || ".lat-runtime"} disabled={loading || download.busy} onChange={(event) => onDirectoryDraftChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onApplyDirectory(); }} aria-label="自定义模型路径" /><button className="folder-button" disabled={loading || download.busy} onClick={onChooseDirectory} aria-label="选择模型目录" title="选择目录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l1.7 2h9.3v9.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2z" /><path d="M3.5 6.5V5.8a1.3 1.3 0 0 1 1.3-1.3h4.2l1.6 2h8.7a1.2 1.2 0 0 1 1.2 1.2v.8" /></svg></button></div><div className="custom-directory-footer"><small>{displayedDirectory ? "当前目录 " + displayedDirectory : "默认目录为安装路径下的 .lat-runtime"}</small><button className="text-button" disabled={loading || download.busy} onClick={onApplyDirectory}>应用路径</button></div></div>}
       </div>}
 
@@ -256,8 +255,17 @@ export default function App() {
         setDownload((current) => ({ ...current, phase: event.phase || current.phase, percent: event.percent ?? current.percent, status: event.message || event.status || current.status, speedMiB: event.speed_mib_per_second ?? current.speedMiB, fileIndex: event.file_index ?? current.fileIndex, fileCount: event.file_count ?? current.fileCount, fileName: event.file_name ?? current.fileName, cancelRequested: event.status === "cancelled" ? false : current.cancelRequested }));
       });
       if (outcome === "cancelled") { cancelRequestedRef.current = false; setDownload((current) => ({ ...current, status: "已取消", cancelRequested: false })); return; }
+      const downloaded = await refresh();
+      if (!downloaded.runtime?.verified || !downloaded.model?.verified) {
+        setDownload((current) => ({ ...current, status: "下载未完成", error: "下载流已结束 但运行时或模型校验未通过" }));
+        return;
+      }
       await loadModel(DOWNLOAD_MODEL);
       const next = await refresh();
+      if (!next.ready) {
+        setDownload((current) => ({ ...current, status: "模型启动失败", error: "模型文件已校验 但 llama.cpp 未能启动 请查看日志" }));
+        return;
+      }
       setStatus(next); setSelectedModel(DOWNLOAD_MODEL); setScreen("translator");
     } catch (reason) { const message = reason instanceof Error ? reason.message : String(reason); setDownload((current) => ({ ...current, error: message })); }
     finally { cancelRequestedRef.current = false; setBusy(false); setDownload((current) => ({ ...current, busy: false, cancelRequested: false })); }

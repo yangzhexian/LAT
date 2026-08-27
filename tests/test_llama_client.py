@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from local_translator.config import Settings
-from local_translator.llama_client import DownloadAsset, LlamaCppProcessManager
+from local_translator.llama_client import DownloadAsset, LlamaCppProcessManager, LlamaError
 
 
 class FakeResponse:
@@ -59,5 +59,30 @@ class LlamaDownloadTests(unittest.TestCase):
             self.assertIn("retrying", [event["status"] for event in events])
             self.assertEqual(events[-1]["status"], "verified")
 
+    def test_model_source_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = LlamaCppProcessManager(Settings(runtime_root=directory))
+            destination = Path(directory) / "HY-MT2-7B-Q6_K.gguf"
+            fallback_events = iter([
+                {"type": "download", "phase": "model", "status": "verified", "percent": 100.0},
+            ])
+            with patch.object(manager, "_download_asset", side_effect=[LlamaError("Hugging Face unavailable"), fallback_events]):
+                events = list(manager._download_model(destination, 1, 1))
+
+        self.assertEqual(events[0]["status"], "switching_source")
+        self.assertEqual(events[1]["status"], "verified")
+
+    def test_install_stream_emits_complete_only_after_model_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = LlamaCppProcessManager(Settings(runtime_root=directory))
+            manager._server_executable = lambda: Path(directory) / "llama-server.exe"
+            manager._download_model = lambda *_args: iter([
+                {"type": "download", "phase": "model", "status": "verified", "percent": 100.0},
+            ])
+            manager._verified = lambda *_args: True
+            events = list(manager.install_stream())
+
+        self.assertEqual(events[-1]["status"], "complete")
+        self.assertEqual(events[-1]["file_count"], 3)
 if __name__ == "__main__":
     unittest.main()

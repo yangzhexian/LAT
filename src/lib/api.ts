@@ -96,24 +96,31 @@ export async function downloadModelStream(model: string, onEvent: (event: Downlo
   let buffer = "";
   let streamError = "";
   let wasCancelled = false;
+  let streamCompleted = false;
+
+  const consumeEvent = (raw: string) => {
+    const line = raw.split(/\r?\n/).find((item) => item.startsWith("data: "));
+    if (!line) return;
+    const event = JSON.parse(line.slice(6)) as DownloadEvent;
+    if (event.type === "error") streamError = event.message || "模型下载失败";
+    if (event.status === "cancelled") wasCancelled = true;
+    if (event.status === "complete") streamCompleted = true;
+    onEvent(event);
+  };
+
   while (true) {
     const chunk = await reader.read();
     buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
     const events = buffer.split("\n\n");
     buffer = events.pop() || "";
-    for (const raw of events) {
-      const line = raw.split("\n").find((item) => item.startsWith("data: "));
-      if (line) {
-        const event = JSON.parse(line.slice(6)) as DownloadEvent;
-        if (event.type === "error") streamError = event.message || "模型下载失败";
-        if (event.status === "cancelled") wasCancelled = true;
-        onEvent(event);
-      }
-    }
+    for (const raw of events) consumeEvent(raw);
     if (chunk.done) break;
   }
+  if (buffer.trim()) consumeEvent(buffer);
   if (streamError) throw new Error(streamError);
-  return wasCancelled ? "cancelled" : "completed";
+  if (wasCancelled) return "cancelled";
+  if (!streamCompleted) throw new Error("模型下载流提前结束 未收到完成确认");
+  return "completed";
 }
 
 export function cancelDownload(): Promise<unknown> {
@@ -146,7 +153,7 @@ export async function translateStream(body: TranslationRequest, onEvent: (event:
     const events = buffer.split("\n\n");
     buffer = events.pop() || "";
     for (const raw of events) {
-      const line = raw.split("\n").find((item) => item.startsWith("data: "));
+      const line = raw.split(/\r?\n/).find((item) => item.startsWith("data: "));
       if (!line) continue;
       onEvent(JSON.parse(line.slice(6)) as StreamEvent);
     }
