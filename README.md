@@ -4,7 +4,7 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.1.1-beta.8`
+> 当前版本：`0.1.1-beta.9`
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
@@ -43,7 +43,7 @@ LAT 当前支持 Tencent 官方 GGUF 仓库中的 Hy-MT2-1.8B 和 Hy-MT2-7B 变�
 
 报告第二版的量化实验显示，Hy-MT2-7B Q4_K_M 在 FLORES-200 的三个方向得分为 `88.96 / 91.46 / 86.90`，IFMTBench 得分为 `75.11`；Hy-MT2-1.8B Q4_K_M 对应为 `82.22 / 85.87 / 77.19` 和 `63.47`。报告没有单独给出 Q6_K 和 Q8_0 的 benchmark，因此 LAT 将它们作为同一参数规模下的高精度部署选项，不将推断结果冒充为官方 benchmark。
 
-模型来源为 [Tencent 官方 Hugging Face 集合](https://huggingface.co/collections/tencent/hy-mt2)。当前每个模型都配置了官方 SHA-256，主源不可用时会尝试 `hf-mirror.com`，备用源必须通过相同校验才能安装。
+模型来源为 [Tencent 官方 Hugging Face 集合](https://huggingface.co/collections/tencent/hy-mt2)。当前每个模型都配置了官方 SHA-256，默认使用 `hf-mirror.com`，镜像不可用时再尝试官方 Hugging Face 源，备用源必须通过相同校验才能安装。
 
 ## 系统要求
 
@@ -275,4 +275,4 @@ LAT 会使用 Hy-MT2 官方翻译指令模板，并对 URL、代码占位符和 
 
 ## License
 
-LAT 当前尚未附带开源许可证。正式发布前，请在仓库根目录添加 `LICENSE` 并明确授权范围。
+LAT 以 MIT 许可证发布，详见 [LICENSE](LICENSE)。

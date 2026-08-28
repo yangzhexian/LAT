@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from local_translator.catalog import DownloadAsset
+from local_translator.catalog import DownloadAsset, get_model_variant
 from local_translator.config import Settings
 from local_translator.errors import LlamaError
 from local_translator.runtime import LlamaCppProcessManager
@@ -33,6 +33,12 @@ class FakeResponse:
 
 
 class RuntimeDownloadTests(unittest.TestCase):
+    def test_model_download_prefers_hy_mt2_mirror(self):
+        assets = get_model_variant().assets
+
+        self.assertTrue(assets[0].url.startswith("https://hf-mirror.com/"))
+        self.assertTrue(assets[1].url.startswith("https://huggingface.co/"))
+
     def test_checksum_mismatch_removes_partial_file(self):
         payload = b"corrupt archive"
         asset = DownloadAsset("runtime", "https://example.invalid/runtime.zip", "0" * 64)

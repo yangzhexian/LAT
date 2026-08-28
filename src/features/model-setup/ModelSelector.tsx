@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { formatBytes } from "../../lib/text";
 import type { DownloadState, LocalModel, LocalStatus, ModelOption } from "../../types";
 
@@ -56,6 +57,8 @@ export function ModelSelector({
   onRefresh,
 }: ModelSelectorProps) {
   const models = status?.models || [];
+  const hasModels = models.length > 0;
+  const [downloadOpen, setDownloadOpen] = useState(!hasModels);
   const downloadOptions = download.environment?.models || [];
   const selectedOption = downloadOptions.find((option) => option.id === downloadModel);
   const recommendedOption = downloadOptions.find((option) => option.recommended);
@@ -64,6 +67,10 @@ export function ModelSelector({
     download.fileCount > 0
       ? "第 " + Math.max(1, download.fileIndex) + "/" + download.fileCount + " 项 · "
       : "";
+
+  useEffect(() => {
+    setDownloadOpen(!hasModels);
+  }, [hasModels]);
 
   return (
     <section className="select-screen">
@@ -98,13 +105,18 @@ export function ModelSelector({
         ))}
       </div>
 
-      <div className="download-card">
-        <div className="download-card-header">
+      <details
+        className="download-card"
+        open={downloadOpen}
+        onToggle={(event) => setDownloadOpen(event.currentTarget.open)}
+      >
+        <summary className="download-card-header">
           <div>
             <strong>下载 Hy-MT2 GGUF 模型</strong>
             <small>运行时和模型会保存到本机数据目录</small>
           </div>
-        </div>
+          <span className="download-card-chevron" aria-hidden="true">⌄</span>
+        </summary>
         {downloadOptions.length > 0 && (
           <div className="model-download-picker">
             <label htmlFor="download-model">下载版本</label>
@@ -126,10 +138,14 @@ export function ModelSelector({
                 {selectedOption.parameter_size} 参数 · {selectedOption.quantization} · 建议总显存 {
                   selectedOption.recommended_vram_gib
                 } GiB
+                {download.environment?.best_gpu && (
+                  <>
+                    {" · "}
+                    {download.environment.best_gpu.name} 总显存{" "}
+                    {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB
+                  </>
+                )}
               </small>
-            )}
-            {selectedOption?.benchmark && (
-              <small className="model-download-benchmark">{selectedOption.benchmark}</small>
             )}
             {recommendedOption && recommendedOption.id !== downloadModel && (
               <button
@@ -143,15 +159,9 @@ export function ModelSelector({
             )}
           </div>
         )}
-        {download.environment && (
+        {download.environment && download.environment.status !== "ready" && (
           <div className={"environment-note " + download.environment.status}>
             <strong>{download.environment.message}</strong>
-            {download.environment.best_gpu && (
-              <small>
-                {download.environment.best_gpu.name} · 总显存 {" "}
-                {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB
-              </small>
-            )}
             {download.environment.suggestion && <span>{download.environment.suggestion}</span>}
           </div>
         )}
@@ -241,7 +251,7 @@ export function ModelSelector({
             </div>
           </div>
         )}
-      </div>
+      </details>
 
       <button
         type="button"

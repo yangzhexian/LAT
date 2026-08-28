@@ -30,7 +30,6 @@ class ModelVariant:
     sha256: str
     recommended_vram_gib: float
     quality_rank: int
-    benchmark: str
     repo: str
 
     @property
@@ -38,13 +37,13 @@ class ModelVariant:
         return (
             DownloadAsset(
                 self.filename,
-                f"https://huggingface.co/{self.repo}/resolve/main/{self.filename}?download=true",
+                f"https://hf-mirror.com/{self.repo}/resolve/main/{self.filename}?download=true",
                 self.sha256,
                 self.size,
             ),
             DownloadAsset(
                 self.filename,
-                f"https://hf-mirror.com/{self.repo}/resolve/main/{self.filename}?download=true",
+                f"https://huggingface.co/{self.repo}/resolve/main/{self.filename}?download=true",
                 self.sha256,
                 self.size,
             ),
@@ -62,7 +61,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
         4.0,
         70,
-        "报告 FLORES-200 82.22 / 85.87 / 77.19 · IFMTBench 63.47",
         "tencent/Hy-MT2-1.8B-GGUF",
     ),
     ModelVariant(
@@ -75,7 +73,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         "d98fe604dec1f28f58f80d7d560f7177e584d3b8e5835862687660e5ff97cb40",
         4.0,
         74,
-        "报告未单独列出 Q6_K 可参考 1.8B FP8 与 Q4_K_M 结果",
         "tencent/Hy-MT2-1.8B-GGUF",
     ),
     ModelVariant(
@@ -88,7 +85,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         "5c3fe0b1408a5ceb0143184ef247b11b579c525f4b02b060e6c851bb76fef1a4",
         5.0,
         78,
-        "报告未单独列出 Q8_0 高精度量化通常更接近 FP8 与 BF16",
         "tencent/Hy-MT2-1.8B-GGUF",
     ),
     ModelVariant(
@@ -101,7 +97,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         "dcc33bbae9b28d923c8c76a64f6157840841d26f8774f3dfd770d5fabeeb1cd7",
         2.0,
         55,
-        "报告 FLORES-200 80.86 / 84.74 / 76.31 · IFMTBench 58.99",
         "tencent/Hy-MT2-1.8B-2Bit-GGUF",
     ),
     ModelVariant(
@@ -114,7 +109,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93",
         2.0,
         45,
-        "报告说明约 440 MB 存储并可获得约 1.5× 推理加速",
         "tencent/Hy-MT2-1.8B-1.25Bit-GGUF",
     ),
     ModelVariant(
@@ -127,7 +121,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
         8.0,
         88,
-        "报告 FLORES-200 88.96 / 91.46 / 86.90 · IFMTBench 75.11",
         "tencent/Hy-MT2-7B-GGUF",
     ),
     ModelVariant(
@@ -140,7 +133,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         MODEL_SHA256,
         10.0,
         94,
-        "报告未单独列出 Q6_K 7B Q4_K_M 的质量指标可作为保守参考",
         "tencent/Hy-MT2-7B-GGUF",
     ),
     ModelVariant(
@@ -153,7 +145,6 @@ MODEL_VARIANTS: tuple[ModelVariant, ...] = (
         "58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0",
         13.0,
         100,
-        "报告未单独列出 Q8_0 高精度量化更接近 7B FP8 与 BF16",
         "tencent/Hy-MT2-7B-GGUF",
     ),
 )
@@ -177,7 +168,6 @@ def model_options() -> list[dict[str, object]]:
             "size_gib": round(variant.size / (1024**3), 2),
             "recommended_vram_gib": variant.recommended_vram_gib,
             "quality_rank": variant.quality_rank,
-            "benchmark": variant.benchmark,
         }
         for variant in MODEL_VARIANTS
     ]

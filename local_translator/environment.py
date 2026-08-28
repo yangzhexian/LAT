@@ -89,7 +89,7 @@ def inspect_download_environment(model: str = MODEL_ID) -> dict[str, Any]:
         "best_gpu": best_gpu,
         "status": "ready",
         "message": f"{selected.label} 建议总显存 {selected.recommended_vram_gib:.0f} GiB",
-        "suggestion": f"推荐下载 {recommended.label} · {recommended.benchmark}",
+        "suggestion": f"推荐下载 {recommended.label}",
     }
     if not gpus:
         result.update(
@@ -106,7 +106,7 @@ def inspect_download_environment(model: str = MODEL_ID) -> dict[str, Any]:
             {
                 "status": "insufficient",
                 "message": f"{best_gpu['name']} 总显存 {total:.2f} GiB 低于 {selected.label} 的建议值 {selected.recommended_vram_gib:.0f} GiB",
-                "suggestion": f"建议改用 {recommended.label} · {recommended.benchmark}",
+                "suggestion": f"建议改用 {recommended.label}",
             }
         )
     elif selected.id == recommended.id:

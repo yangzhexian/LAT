@@ -72,7 +72,6 @@ export interface ModelOption {
   size_gib: number;
   recommended_vram_gib: number;
   quality_rank: number;
-  benchmark: string;
   recommended?: boolean;
   fits_total_vram?: boolean;
 }

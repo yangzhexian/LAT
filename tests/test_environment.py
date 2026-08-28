@@ -39,6 +39,8 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(result["recommended_model"], "hy-mt2-7b:q6_k")
         self.assertEqual(result["model"], "hy-mt2-7b:q6_k")
         self.assertTrue(any(option["recommended"] for option in result["models"]))
+        self.assertNotIn("报告", result["suggestion"])
+        self.assertTrue(all("benchmark" not in option for option in result["models"]))
         self.assertNotIn("free_vram_gib", result["best_gpu"])
 
     @patch("local_translator.environment.subprocess.run")
