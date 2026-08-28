@@ -58,8 +58,7 @@ export function ModelSelector({
   const downloadOptions = download.environment?.models || [];
   const selectedOption = downloadOptions.find((option) => option.id === downloadModel);
   const recommendedOption = downloadOptions.find((option) => option.recommended);
-  const selectedModelName =
-    models.find((model) => model.name === selectedModel)?.name || "请选择模型";
+  const selectedLocalModel = models.find((model) => model.name === selectedModel);
   const displayedDirectory = dataDirectory || defaultDataDirectory;
   const fileProgress =
     download.fileCount > 0
@@ -93,8 +92,10 @@ export function ModelSelector({
         >
           <summary className="download-card-header">
             <div>
-              <strong>选择模型</strong>
-              <small>{selectedModelName}</small>
+              <strong>{selectedLocalModel?.name || "请选择模型"}</strong>
+              <small>
+                {selectedLocalModel?.size ? formatBytes(selectedLocalModel.size) : "未知大小"} · GGUF
+              </small>
             </div>
             <span className="collapsible-chevron" aria-hidden="true" />
           </summary>
@@ -109,7 +110,7 @@ export function ModelSelector({
                   setModelSelectionOpen(false);
                 }}
               >
-                <span className="model-icon">◈</span>
+                <span className="status-dot model-status-dot" aria-hidden="true" />
                 <span className="model-copy">
                   <strong>{model.name}</strong>
                   <small>{model.size ? formatBytes(model.size) : "未知大小"} · GGUF</small>
