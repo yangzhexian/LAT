@@ -62,12 +62,29 @@ export interface GpuInfo {
   total_vram_gib: number;
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+  parameter_size: string;
+  quantization: string;
+  filename: string;
+  size_bytes: number;
+  size_gib: number;
+  recommended_vram_gib: number;
+  quality_rank: number;
+  benchmark: string;
+  recommended?: boolean;
+  fits_total_vram?: boolean;
+}
+
 export interface DownloadEnvironment {
   model: string;
+  recommended_model: string;
   recommended_vram_gib: number;
   required_vram_gib?: number;
   gpus: GpuInfo[];
   best_gpu?: GpuInfo;
+  models: ModelOption[];
   status: "ready" | "insufficient" | "unknown";
   message: string;
   suggestion: string;

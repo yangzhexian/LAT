@@ -7,6 +7,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
+from .catalog import MODEL_ID, get_model_variant
+
 
 PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 
@@ -18,6 +20,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8787
     model_dir: str = ""
+    model_name: str = MODEL_ID
     runtime_root: str = ""
     llama_runtime_variant: str = "cuda-13.3"
     llama_release: str = "b10545"
@@ -55,6 +58,7 @@ class Settings:
             "host": ("LLM_TRANSLATOR_HOST", str),
             "port": ("LLM_TRANSLATOR_PORT", int),
             "model_dir": ("LAT_MODEL_DIR", str),
+            "model_name": ("LAT_MODEL", str),
             "runtime_root": ("LAT_RUNTIME_ROOT", str),
             "llama_runtime_variant": ("LAT_LLAMA_RUNTIME_VARIANT", str),
             "llama_release": ("LAT_LLAMA_RELEASE", str),
@@ -94,7 +98,7 @@ class Settings:
 
     @property
     def resolved_model_path(self) -> Path:
-        return self.resolved_model_dir / "HY-MT2-7B-Q6_K.gguf"
+        return self.resolved_model_dir / get_model_variant(self.model_name).filename
 
     @property
     def resolved_log_file(self) -> Path:

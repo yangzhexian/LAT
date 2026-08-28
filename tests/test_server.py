@@ -3,7 +3,7 @@ import threading
 import unittest
 import urllib.request
 from http.server import ThreadingHTTPServer
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from local_translator.config import Settings
 from local_translator.server import App, RequestHandler
@@ -67,5 +67,14 @@ class ServerTests(unittest.TestCase):
         self.assertIn('"status": "complete"', body)
 
 
+    @patch("local_translator.server.inspect_download_environment")
+    def test_environment_accepts_selected_model_query(self, inspect):
+        inspect.return_value = {"model": "hy-mt2-7b:q8_0", "status": "insufficient"}
+
+        with urllib.request.urlopen(self.url + "/admin/environment?model=hy-mt2-7b%3Aq8_0") as response:
+            body = json.loads(response.read().decode())
+
+        self.assertEqual(body["model"], "hy-mt2-7b:q8_0")
+        inspect.assert_called_once_with("hy-mt2-7b:q8_0")
 if __name__ == "__main__":
     unittest.main()

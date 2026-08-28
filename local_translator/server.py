@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 import logging
 import threading
 import time
@@ -9,7 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from .catalog import MODEL_ID
+from .catalog import MODEL_CATALOG, MODEL_ID
 from .config import Settings
 from .environment import inspect_download_environment
 from .engine import TranslationEngine, TranslationOutputError, TranslationRequestError
@@ -109,8 +110,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             if self.path == "/admin/status":
                 self._json(200, self.app.engine.manager.status())
                 return
-            if self.path in {"/admin/environment", "/admin/runtime/status"}:
-                value = inspect_download_environment() if self.path.endswith("environment") else self.app.engine.manager.status()
+            if self.path.startswith("/admin/environment") or self.path == "/admin/runtime/status":
+                if urllib.parse.urlparse(self.path).path == "/admin/environment":
+                    query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    requested_model = query.get("model", [MODEL_ID])[0]
+                    value = inspect_download_environment(requested_model)
+                else:
+                    value = self.app.engine.manager.status()
                 self._json(200, value)
                 return
             if self.path == "/v1/models":
@@ -135,6 +141,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"status": "started", "backend": "llama.cpp", "model": client.resolve_model()})
                 return
             if self.path in {"/admin/load", "/admin/engine/load"}:
+                body = self._read_optional_json()
+                requested_model = body.get("model", self.app.engine.manager.settings.model_name)
+                if not isinstance(requested_model, str) or requested_model not in MODEL_CATALOG:
+                    raise TranslationRequestError("不支持的 Hy-MT2 模型版本")
+                self.app.engine.manager.settings.model_name = requested_model
                 client = self.app.engine.manager.ensure_server()
                 self._json(200, {"status": "loaded", "model": client.resolve_model()})
                 return
@@ -178,8 +189,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _stream_download(self, body: dict[str, Any]) -> None:
         requested_model = body.get("model", MODEL_ID)
-        if requested_model != MODEL_ID:
-            raise TranslationRequestError(f"当前下载入口只支持 {MODEL_ID}")
+        if not isinstance(requested_model, str) or requested_model not in MODEL_CATALOG:
+            raise TranslationRequestError("不支持的 Hy-MT2 模型版本")
         self.send_response(200)
         self._headers("text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -192,7 +203,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
-            for event in self.app.engine.manager.install_stream():
+            for event in self.app.engine.manager.install_stream(requested_model):
                 emit(event)
         except DownloadCancelled as error:
             try:

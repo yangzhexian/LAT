@@ -12,15 +12,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterator
 
-from .catalog import (
-    MODEL_ASSETS,
-    MODEL_FILENAME,
-    MODEL_ID,
-    MODEL_SHA256,
-    MODEL_SIZE,
-    RUNTIME_ASSETS,
-    DownloadAsset,
-)
+from .catalog import MODEL_VARIANTS, RUNTIME_ASSETS, DownloadAsset, ModelVariant, get_model_variant
 from .config import Settings
 from .downloader import AssetDownloader
 from .errors import DownloadCancelled, LlamaError
@@ -32,7 +24,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class LlamaCppProcessManager:
-    """Install and manage the single llama-server process owned by LAT."""
+    """Install and manage the llama-server process owned by LAT."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -101,9 +93,12 @@ class LlamaCppProcessManager:
         destination: Path,
         file_index: int,
         file_count: int,
+        variant: ModelVariant | None = None,
     ) -> Iterator[dict[str, Any]]:
+        selected = variant or get_model_variant(self.settings.model_name)
+        assets = selected.assets
         last_error: LlamaError | None = None
-        for source_index, asset in enumerate(MODEL_ASSETS):
+        for source_index, asset in enumerate(assets):
             try:
                 yield from self._download_asset(asset, destination, "model", file_index, file_count)
                 return
@@ -111,13 +106,13 @@ class LlamaCppProcessManager:
                 raise
             except LlamaError as error:
                 last_error = error
-                if source_index >= len(MODEL_ASSETS) - 1:
+                if source_index >= len(assets) - 1:
                     raise
                 destination.with_suffix(destination.suffix + ".part").unlink(missing_ok=True)
                 LOGGER.warning(
                     "model source failed, switching source %s/%s: %s",
                     source_index + 1,
-                    len(MODEL_ASSETS),
+                    len(assets),
                     error,
                 )
                 yield {
@@ -126,11 +121,11 @@ class LlamaCppProcessManager:
                     "status": "switching_source",
                     "percent": 0.0,
                     "completed_bytes": 0,
-                    "total_bytes": MODEL_SIZE,
+                    "total_bytes": selected.size,
                     "file_index": file_index,
                     "file_count": file_count,
-                    "file_name": MODEL_FILENAME,
-                    "message": f"当前下载源不可用 正在切换备用源 {source_index + 2}/{len(MODEL_ASSETS)}",
+                    "file_name": selected.filename,
+                    "message": f"当前下载源不可用 正在切换备用源 {source_index + 2}/{len(assets)}",
                 }
         if last_error is not None:
             raise last_error
@@ -162,9 +157,11 @@ class LlamaCppProcessManager:
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 
-    def install_stream(self) -> Iterator[dict[str, Any]]:
+    def install_stream(self, model: str | None = None) -> Iterator[dict[str, Any]]:
         if not self.download_lock.acquire(blocking=False):
             raise LlamaError("已有下载任务正在运行")
+        selected = get_model_variant(model or self.settings.model_name)
+        self.settings.model_name = selected.id
         self.downloader.reset()
         try:
             self.settings.resolved_data_root.mkdir(parents=True, exist_ok=True)
@@ -197,8 +194,9 @@ class LlamaCppProcessManager:
                     "file_name": "llama.cpp runtime",
                 }
 
-            yield from self._download_model(self.settings.resolved_model_path, file_count, file_count)
-            if not self._verified(self.settings.resolved_model_path, MODEL_SIZE, MODEL_SHA256):
+            model_path = self.settings.resolved_model_path
+            yield from self._download_model(model_path, file_count, file_count, selected)
+            if not self._verified(model_path, selected.size, selected.sha256):
                 raise LlamaError("模型下载完成但校验未通过")
             yield {
                 "type": "download",
@@ -207,7 +205,7 @@ class LlamaCppProcessManager:
                 "percent": 100.0,
                 "file_index": file_count,
                 "file_count": file_count,
-                "file_name": MODEL_FILENAME,
+                "file_name": selected.filename,
             }
             yield {
                 "type": "download",
@@ -216,7 +214,7 @@ class LlamaCppProcessManager:
                 "percent": 100.0,
                 "file_index": file_count,
                 "file_count": file_count,
-                "file_name": MODEL_FILENAME,
+                "file_name": selected.filename,
                 "message": "全部文件下载并校验完成",
             }
         finally:
@@ -236,12 +234,13 @@ class LlamaCppProcessManager:
             and self.client.is_ready()
         ):
             return self.client
+        selected = get_model_variant(self.settings.model_name)
         executable = self._server_executable()
         model_path = self.settings.resolved_model_path
         if executable is None:
             raise LlamaError("尚未安装 llama.cpp 运行时 请先在启动界面安装")
-        if not self._verified(model_path, MODEL_SIZE, MODEL_SHA256):
-            raise LlamaError("尚未安装或校验 Hy-MT2-7B Q6_K 模型")
+        if not self._verified(model_path, selected.size, selected.sha256):
+            raise LlamaError(f"尚未安装或校验 {selected.label} 模型")
         self.settings.resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
         port = self._choose_port()
         log_handle = self.settings.resolved_log_file.open("ab")
@@ -305,18 +304,38 @@ class LlamaCppProcessManager:
                 pass
 
     def status(self) -> dict[str, Any]:
+        selected = get_model_variant(self.settings.model_name)
         executable = self._server_executable()
         model = self.settings.resolved_model_path
         process_running = self.owned_process is not None and self.owned_process.poll() is None
         ready = bool(self.client and process_running and self.client.is_ready())
-        model_verified = self._verified(model, MODEL_SIZE, MODEL_SHA256)
+        model_verified = self._verified(model, selected.size, selected.sha256)
+        models: list[dict[str, Any]] = []
+        for variant in MODEL_VARIANTS:
+            path = self.settings.resolved_model_dir / variant.filename
+            if not self._verified(path, variant.size, variant.sha256):
+                continue
+            models.append(
+                {
+                    "name": variant.id,
+                    "model": variant.id,
+                    "size": variant.size,
+                    "details": {
+                        "family": "Hy-MT2",
+                        "parameter_size": variant.parameter_size,
+                        "quantization_level": variant.quantization,
+                        "format": "GGUF",
+                    },
+                }
+            )
+        active = next((item for item in models if item["name"] == selected.id), None)
         result: dict[str, Any] = {
             "backend": "llama.cpp",
             "ready": ready,
             "owned_process": process_running,
-            "model_configured": MODEL_ID,
-            "active_model": MODEL_ID if ready else None,
-            "resolved_model": MODEL_ID,
+            "model_configured": selected.id,
+            "active_model": selected.id if ready else None,
+            "resolved_model": selected.id,
             "version": self.settings.llama_release,
             "runtime": {
                 "installed": executable is not None,
@@ -328,26 +347,13 @@ class LlamaCppProcessManager:
                 "installed": model_verified,
                 "verified": model_verified,
                 "path": str(model),
-                "size_bytes": MODEL_SIZE,
+                "size_bytes": selected.size,
             },
-            "models": [],
-            "running_models": [],
+            "models": models,
+            "running_models": [active] if ready and active else [],
         }
-        if model_verified:
-            result["models"] = [
-                {
-                    "name": MODEL_ID,
-                    "model": MODEL_ID,
-                    "size": MODEL_SIZE,
-                    "details": {
-                        "family": "Hy-MT2",
-                        "quantization_level": "Q6_K",
-                        "format": "GGUF",
-                    },
-                }
-            ]
         if not ready and executable is None:
             result["warning"] = "尚未安装 llama.cpp 运行时"
         elif not ready and not model_verified:
-            result["warning"] = "尚未下载或校验 Hy-MT2-7B Q6_K 模型"
+            result["warning"] = f"尚未下载或校验 {selected.label} 模型"
         return result

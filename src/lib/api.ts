@@ -105,8 +105,9 @@ export function getStatus(): Promise<LocalStatus> {
   return request<LocalStatus>("/admin/status");
 }
 
-export function getDownloadEnvironment(): Promise<DownloadEnvironment> {
-  return request<DownloadEnvironment>("/admin/environment");
+export function getDownloadEnvironment(model?: string): Promise<DownloadEnvironment> {
+  const query = model ? "?model=" + encodeURIComponent(model) : "";
+  return request<DownloadEnvironment>("/admin/environment" + query);
 }
 
 export function setDataDirectory(

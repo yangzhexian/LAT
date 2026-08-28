@@ -6,7 +6,6 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterator
 
-from .catalog import MODEL_ID
 from .config import Settings
 from .errors import LlamaError, LlamaHTTPError
 
@@ -63,9 +62,8 @@ class LlamaServerClient:
         except LlamaError:
             return False
 
-    @staticmethod
-    def resolve_model() -> str:
-        return MODEL_ID
+    def resolve_model(self) -> str:
+        return self.settings.model_name
 
     def chat(
         self,

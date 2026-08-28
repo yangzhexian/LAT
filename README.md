@@ -1,176 +1,190 @@
 # LAT — Local AI Translator
 
-LAT 是一个面向 Windows 的本地 AI 翻译桌面应用。它基于 Tauri 2、Python 本地网关和 llama.cpp，针对 Hy-MT2 7B 翻译模型进行提示词、公式保护和输出质量控制优化。
+LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、Python 本地网关和 llama.cpp 构建，针对 Tencent Hy-MT2 翻译模型提供模型管理、格式保护和输出质量检查能力。
 
-模型和翻译内容都留在本机，不调用云端翻译服务。
+LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前状态：0.1.1 Beta 7
+> 当前版本：`0.1.1-beta.8`
 >
-> 安装包不包含模型权重和 llama.cpp。首次使用时，LAT 会在用户选择的本地目录中自动下载并校验它们。
+> 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
-## Features
+## 功能概览
 
-- 无需单独安装 Ollama
-- 自动安装和管理 Windows NVIDIA CUDA 版 llama.cpp
-- 下载官方 Hy-MT2-7B-GGUF Q6_K 权重
-- 下载前通过 nvidia-smi 检查 GPU 显存
-- 显存不足时提示风险并建议更小模型
-- 中文、英文、日文、韩文、法文、德文、俄文等语言互译
-- 左右或上下翻译排版，并支持交换语言和内容
-- 自动字体大小和合并换行设置
-- 明暗主题切换
-- LaTeX 文本预览，支持 $...$、$$...$$、\(...\) 和 \[...\]
-- LaTeX 预览使用本地 MathJax 和 Times New Roman 风格字体
-- 实时显示翻译进度和整数 tokens/s，完成后保留速度、耗时和生成 token 数
-- 关闭模型时停止 llama-server 并释放显存
-- 关闭应用或卸载应用时清理 gateway 和 llama-server 进程
-- 为 nextai-translator 提供 OpenAI 兼容接口
+- 自动发现本机已安装并通过校验的 Hy-MT2 GGUF 模型
+- 从开始界面选择参数规模和量化版本
+- 使用 GPU 总显存进行环境预检并提供推荐版本
+- 自动下载和管理固定版本的 Windows CUDA llama.cpp 运行时
+- 支持断点续传、备用下载源、网络重试、速度显示、取消下载和 SHA-256 校验
+- 支持中文、英文、日文、韩文、法文、德文、俄文等 Hy-MT2 支持语言的互译
+- 支持左右或上下排版，并可交换源语言与目标语言
+- 支持明暗主题、自动字体大小和合并换行设置
+- LaTeX 预览支持 `$...$`、`$$...$$`、`\(...\)` 和 `\[...\]`
+- 使用本地 MathJax 渲染 LaTeX，预览字体采用 Times New Roman
+- 翻译过程中显示推理进度和整数 tokens/s，完成后保留最终速度、耗时和生成 token 数
+- 关闭模型时终止 LAT 管理的 llama-server 并释放显存
+- 提供 OpenAI 兼容接口，可供 nextai-translator 等客户端调用
 
-## Architecture
+## 模型选择与推荐
 
-~~~text
-LAT Desktop (Tauri 2)
-        │
-        ▼
-Local Python Gateway
-        │
-        ▼
-Managed llama.cpp server ── Hy-MT2-7B-GGUF Q6_K
-~~~
+LAT 当前支持 Tencent 官方 GGUF 仓库中的 Hy-MT2-1.8B 和 Hy-MT2-7B 变体。开始界面会读取 GPU 总显存，并按照模型文件、llama.cpp 缓冲区和常用翻译上下文预留保守余量。检测使用总显存，不使用当前空闲显存，因此不会因为其他程序短时占用显存而改变推荐结果。
 
-Python 网关负责管理 llama.cpp 生命周期、下载和校验运行时与模型、抽取翻译请求、保护 URL/代码/占位符/LaTeX 公式，并在模型输出异常时进行质量检查和安全重试。
+| 模型 | 文件大小 | 建议总显存 | 适用场景 |
+| --- | ---: | ---: | --- |
+| Hy-MT2 1.8B · 1.25-bit | 0.43 GiB | 2 GiB | 极低资源和快速试用 |
+| Hy-MT2 1.8B · 2-bit | 0.56 GiB | 2 GiB | 低资源设备 |
+| Hy-MT2 1.8B · Q4_K_M | 1.06 GiB | 4 GiB | 轻量部署和常规翻译 |
+| Hy-MT2 1.8B · Q6_K | 1.37 GiB | 4 GiB | 轻量部署下的质量优先选择 |
+| Hy-MT2 1.8B · Q8_0 | 1.78 GiB | 5 GiB | 1.8B 高精度量化 |
+| Hy-MT2 7B · Q4_K_M | 4.31 GiB | 8 GiB | 7B 质量与显存的平衡 |
+| Hy-MT2 7B · Q6_K | 5.74 GiB | 10 GiB | 12 GiB 级显卡的默认推荐 |
+| Hy-MT2 7B · Q8_0 | 7.43 GiB | 13 GiB | 16 GiB 及以上显卡的高精度选择 |
 
-## Requirements
+显存满足多个版本时，LAT 推荐其中质量排序最高的版本。以 12 GiB 总显存为例，默认推荐 Hy-MT2-7B Q6_K；Q8_0 会显示为超过保守建议值，但用户仍可在确认风险后继续下载。若检测不到 NVIDIA GPU，LAT 会显示提示并默认建议选择较小的 1.8B 版本。
 
-- Windows 10 或更新版本
-- NVIDIA GPU 和可用的 NVIDIA 驱动
-- RTX 5070 推荐总显存至少为 10 GiB
-- Rust stable MSVC toolchain（仅开发和构建桌面端需要）
-- Node.js 18 或更新版本（仅开发和构建桌面端需要）
-- Python 3.10 或更新版本（仅开发和构建桌面端需要）
+报告第二版的量化实验显示，Hy-MT2-7B Q4_K_M 在 FLORES-200 的三个方向得分为 `88.96 / 91.46 / 86.90`，IFMTBench 得分为 `75.11`；Hy-MT2-1.8B Q4_K_M 对应为 `82.22 / 85.87 / 77.19` 和 `63.47`。报告没有单独给出 Q6_K 和 Q8_0 的 benchmark，因此 LAT 将它们作为同一参数规模下的高精度部署选项，不将推断结果冒充为官方 benchmark。
 
-用户不需要预先安装 Ollama、CUDA Toolkit 或 llama.cpp。
+模型来源为 [Tencent 官方 Hugging Face 集合](https://huggingface.co/collections/tencent/hy-mt2)。当前每个模型都配置了官方 SHA-256，主源不可用时会尝试 `hf-mirror.com`，备用源必须通过相同校验才能安装。
 
-## Run from source
+## 系统要求
 
-### Gateway only
+运行已构建的 Windows 安装包：
 
-~~~powershell
+- Windows 10 或更高版本
+- NVIDIA GPU 与可用的 NVIDIA 驱动
+- 建议至少 10 GiB GPU 总显存以使用 Hy-MT2-7B Q6_K
+- 首次下载需要稳定的网络连接和足够的磁盘空间
+- 模型权重和运行时不随安装包分发
+
+从源代码开发或构建桌面端：
+
+- Rust stable MSVC toolchain
+- Node.js 18 或更高版本
+- Python 3.10 或更高版本
+- Windows SDK 与 Visual Studio C++ 构建工具
+
+用户不需要预先安装 Ollama、CUDA Toolkit 或系统级 llama.cpp。LAT 会管理自身使用的 llama.cpp CUDA 运行时。
+
+## 从源代码运行
+
+### 运行本地网关
+
+```powershell
 git clone git@github.com:yangzhexian/LAT.git
-cd LAT
+Set-Location LAT
 
 Copy-Item translator.config.example.json translator.config.json
 python -m local_translator serve
-~~~
+```
 
-网关默认监听 http://127.0.0.1:8787。首次使用时调用下载接口，或直接运行桌面端，在下载卡片下方展开“自定义模型路径”后安装运行时和模型。
+网关默认监听 `http://127.0.0.1:8787`。
 
-### Tauri desktop app
+### 运行 Tauri 开发版本
 
-~~~powershell
+```powershell
 npm install
 python -m pip install -r requirements-build.txt
 .\scripts\build-sidecar.ps1
 npm run tauri dev
-~~~
+```
 
-如果只需要运行前端调试页面：
+仅调试前端时可以运行：
 
-~~~powershell
+```powershell
 npm run dev
-~~~
+```
 
-打开应用后：
+### 首次使用流程
 
-1. 可选展开“自定义模型路径”，输入或选择一个有足够空间且可写的本地目录
-2. 点击“开始下载”
-3. LAT 显示文件总数并下载 llama.cpp CUDA 运行时
-4. LAT 下载并校验 Hy-MT2 Q6_K 权重
-5. 点击启用模型进入翻译工作区
+1. 启动 LAT 并等待网关完成初始化。
+2. 在开始界面选择需要下载的 Hy-MT2 参数规模和量化版本。
+3. 检查 GPU 总显存检测结果和推荐版本。
+4. 可选展开“自定义模型路径”，输入或选择其他本地目录。
+5. 点击“开始下载”，等待 llama.cpp 运行时和模型文件完成校验。
+6. 在已安装模型列表中选择模型并点击“启用模型”。
 
-## Build Windows installer
+## 构建 Windows 安装包
 
-~~~powershell
+```powershell
 python -m pip install -r requirements-build.txt
 npm run build:installer
-~~~
+```
 
-当前 Beta 安装包版本为 0.1.1-beta.7。可上传的安装包和 SHA-256 校验文件位于：
+构建脚本会执行版本检查、构建 Python sidecar、构建前端和 Tauri NSIS 安装包，并在 `artifacts/v<version>/` 中生成安装包及 `SHA256SUMS.txt`。
 
-~~~text
-artifacts/v0.1.1-beta.7/
-~~~
+本地构建生成的 sidecar、Tauri target、前端 dist、MathJax 运行时、模型权重和安装包均不应提交到 Git。
 
-构建过程会生成不纳入 Git 的 sidecar、Tauri target、前端 dist 和 MathJax 运行时文件。卸载或更新时会询问是否删除模型、llama.cpp 运行时、下载缓存和日志，默认保留这些数据。
+## 数据目录
 
-## Runtime and model storage
+默认数据目录为安装路径下的 `.lat-runtime`。也可以在开始界面展开“自定义模型路径”并选择其他目录：
 
-默认目录为安装路径下的 .lat-runtime。桌面端可以在下载卡片下方自定义其他目录，例如：
+```text
+.lat-runtime/
+├─ runtime/llama.cpp/b10545/
+├─ models/
+│  ├─ Hy-MT2-1.8B-Q4_K_M.gguf
+│  └─ HY-MT2-7B-Q6_K.gguf
+├─ downloads/
+└─ logs/translator.log
+```
 
-~~~text
-D:\Tools\LAT\data\
-├─ runtime\llama.cpp\b10545\
-├─ models\HY-MT2-7B-Q6_K.gguf
-├─ downloads\
-└─ logs\
-~~~
+应用关闭模型、退出应用或执行卸载时，会先停止由 LAT 管理的 gateway 和 llama-server。卸载流程会询问是否删除模型、llama.cpp 运行时、下载缓存和日志，默认保留用户数据。
 
-模型文件默认来自 Tencent 官方 Hugging Face 仓库，主源不可用时会自动切换到 hf-mirror.com。两个地址都会使用同一个官方 SHA-256 校验值，运行时来自 llama.cpp Releases。下载会进行断点续传、SHA-256 校验和原子安装。ModelScope 上也存在 Unsloth 发布的 Q6_K 文件，但其 SHA-256 与 Tencent 官方文件不同，当前不会将其静默当作同一模型。
+## 配置
 
-## Configuration
+复制 `translator.config.example.json` 后，可以按需修改 `translator.config.json`：
 
-复制配置模板后，可以按需修改 translator.config.json：
-
-| Key | Default | Description |
+| Key | 默认值 | 说明 |
 | --- | --- | --- |
-| host | 127.0.0.1 | 网关监听地址 |
-| port | 8787 | 网关监听端口 |
-| runtime_root | 空 | llama.cpp 和模型数据目录 |
-| llama_runtime_variant | cuda-13.3 | Windows CUDA 运行时变体 |
-| llama_release | b10545 | 固定的 llama.cpp Release |
-| temperature | 0.7 | Hy-MT2 推荐温度 |
-| top_p | 0.6 | Top-p 采样参数 |
-| top_k | 20 | Top-k 采样参数 |
-| repetition_penalty | 1.05 | 重复惩罚 |
-| num_ctx | 8192 | 上下文长度 |
-| max_output_tokens | 4096 | 最大输出 token 数 |
+| `host` | `127.0.0.1` | 网关监听地址 |
+| `port` | `8787` | 网关监听端口 |
+| `model_name` | `hy-mt2-7b:q6_k` | 当前模型标识 |
+| `runtime_root` | 空 | 运行时、模型和日志根目录 |
+| `llama_runtime_variant` | `cuda-13.3` | Windows CUDA 运行时变体 |
+| `llama_release` | `b10545` | 固定的 llama.cpp release |
+| `temperature` | `0.7` | Hy-MT2 推荐温度 |
+| `top_p` | `0.6` | Top-p 采样参数 |
+| `top_k` | `20` | Top-k 采样参数 |
+| `repetition_penalty` | `1.05` | 重复惩罚 |
+| `num_ctx` | `8192` | 上下文长度 |
+| `max_output_tokens` | `4096` | 最大输出 token 数 |
 
-环境变量可以覆盖配置文件：
+环境变量优先级高于配置文件：
 
-~~~powershell
+```powershell
+$env:LAT_MODEL = "hy-mt2-7b:q6_k"
 $env:LAT_RUNTIME_ROOT = "D:\Tools\LAT\data"
 $env:LAT_LLAMA_RUNTIME_VARIANT = "cuda-13.3"
 $env:LLM_TRANSLATOR_PORT = "8787"
-~~~
+```
 
-## nextai-translator compatibility
+## OpenAI 兼容接口
 
 启动网关并完成模型安装后，在 nextai-translator 的 OpenAI 兼容服务中填写：
 
-~~~text
+```text
 API URL: http://127.0.0.1:8787/v1
 API Key: local
 Model: hy-mt2-7b:q6_k
-~~~
+```
 
-支持的接口包括：
+主要接口：
 
-- GET /v1/models
-- POST /v1/chat/completions
-- POST /translate
-- POST /translate/stream
-- GET /admin/status
-- GET /admin/environment
-- GET /admin/runtime/status
-- POST /admin/directory
-- POST /admin/download
-- POST /admin/download/cancel
-- POST /admin/load
-- POST /admin/unload
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- `POST /translate`
+- `POST /translate/stream`
+- `GET /admin/status`
+- `GET /admin/environment?model=<model-id>`
+- `GET /admin/runtime/status`
+- `POST /admin/directory`
+- `POST /admin/download`
+- `POST /admin/download/cancel`
+- `POST /admin/load`
+- `POST /admin/unload`
 
-## Command line controls
+## 命令行控制
 
-~~~powershell
+```powershell
 # 查看网关、llama.cpp 和模型状态
 python -m local_translator status
 
@@ -182,93 +196,83 @@ python -m local_translator status
 
 # 执行一次本地翻译
 python -m local_translator translate --to English "你好，世界。"
-~~~
+```
 
-## Tests
+## 测试与质量检查
 
-项目使用 Python 标准库测试网关、提示词解析、输出质量检查、SSE 流式翻译、模型下载进度和 GPU 环境预检：
-
-~~~powershell
+```powershell
 python -m unittest discover -s tests -v
 npm run check:version
 npm run typecheck
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
-~~~
+```
 
-## Repository layout
+测试覆盖网关路由、提示词解析、格式和 LaTeX 保护、输出质量检查、SSE 流式翻译、下载器断点续传、网络重试、模型完整性确认以及 GPU 总显存推荐逻辑。
 
-~~~text
-local_translator/       Python 网关、下载器、llama.cpp 客户端和运行时管理
-src/features/           模型安装和翻译工作区功能模块
+## 项目结构
+
+```text
+local_translator/       Python 网关、下载器、客户端和运行时管理
+src/features/           模型安装与翻译工作区
 src/lib/                API、设置、语言和文本处理工具
-src-tauri/              Tauri 2 Rust 工程、图标和 NSIS hooks
-scripts/                sidecar、安装包、版本检查和本地控制脚本
+src-tauri/              Tauri 2 Rust 工程、sidecar 和安装配置
+scripts/                sidecar、安装包、版本检查和控制脚本
 tests/                  Python 自动化测试
 public/                 前端静态资源和 LAT 图标
-docs/releases/          可直接用于 GitHub Prerelease 的发布说明
+docs/releases/          GitHub Release 说明
 translator.config.example.json
                         可提交的配置模板
-~~~
+```
 
-## Repository hygiene
+## Git 提交约定
 
-仓库提交源代码、测试、构建脚本、配置模板和图标，不提交本机环境：
+提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
 
-- .lat-runtime/
-- models/
-- *.gguf
-- *.zip
-- translator.config.json
-- node_modules/、dist/、build/
-- src-tauri/target/
-- src-tauri/binaries/*.exe
-- public/mathjax/ 中生成的 MathJax 文件
-- artifacts/ 中生成的安装包和校验文件
+```text
+feat(model): add hardware-aware Hy-MT2 variants
+fix(ui): align dark theme scrollbars
+fix(runtime): stop managed process during uninstall
+docs(readme): document model selection
+```
 
-提交信息遵循 Conventional Commits：
+不要提交以下本机或构建生成内容：
 
-~~~text
-feat(runtime): add managed llama.cpp runtime
-feat(model): download official Hy-MT2 GGUF weights
-fix(branding): make LAT icon T white
-docs(readme): document Ollama-free setup
-~~~
+- `.lat-runtime/`
+- `translator.config.json`
+- `*.gguf`、`*.zip`
+- `node_modules/`、`dist/`、`build/`
+- `src-tauri/target/`
+- `src-tauri/binaries/*.exe`
+- `public/mathjax/` 中生成的 MathJax 文件
+- `artifacts/` 中的安装包和校验文件
 
-更多提交约定见 CONTRIBUTING.md。
+## 故障排查
 
-## Troubleshooting
+### 下载停留在 0.0%
 
-### llama.cpp 运行时安装失败
+新版本会读取响应头中的文件大小，并显示当前文件序号、总文件数和 MiB/s。网络中断时下载器会保留 `.part` 文件并自动重试；重新连接后会尝试使用 HTTP Range 从断点继续。主源失败后会切换到备用镜像。
 
-确认目标目录可写并至少有约 8 GB 临时空间。LAT 会校验官方压缩包 SHA-256，校验失败时会删除未完成文件并允许重新下载。
-
-### 下载进度为 runtime · downloading 0.0%
-
-旧版本的运行时压缩包没有声明预估大小，前端因此只能显示 0.0%。新版本会从响应头读取运行时文件总大小并显示当前文件/总文件数量、百分比和 MiB/s。下载过程会保留 `.part` 文件，遇到 WinError 10061、超时或连接中断时会自动断点重连并最多重试 5 次。
-
-下载卡片中的“终止下载”会通知网关停止当前任务并保留 `.part` 文件；如果应用需要立即退出，也可以直接关闭窗口，Tauri 会先请求网关停止，再结束 sidecar。下次启动时可以重新点击下载，已完成的临时文件会继续复用。模型下载完成后还必须收到“全部文件下载并校验完成”事件，并通过运行时和模型 SHA-256 校验，LAT 才会启动模型。主下载源连接失败时会自动切换到 hf-mirror.com。
-### GPU 显存警告
-
-Hy-MT2-7B Q6_K 权重约 6.16 GB，LAT 预检使用 GPU 总显存而不是当前可用显存。总显存低于 10 GiB 时建议改用更小的 Hy-MT2 模型。
+“终止下载”会请求网关停止当前任务并保留已下载的临时数据。若需要关闭应用，先点击“终止下载”，等待状态变为已取消，再关闭窗口。应用退出时也会尝试终止网关和 llama-server。
 
 ### 模型启动失败
 
-查看所选数据目录下的 logs/translator.log。首版只支持 Windows NVIDIA CUDA，且使用包含 Hy-MT2 所需 STQ kernel 支持的 llama.cpp Release。
+确认所选数据目录可写并具有足够磁盘空间，确认 NVIDIA 驱动可用，并查看 `logs/translator.log`。如果选定模型的总显存建议值高于 GPU 总显存，优先改用更小的参数规模或更低量化版本。
 
-### 卸载后仍有后台进程
+### 翻译内容包含 prompt 或结果被截断
 
-使用最新 Beta 安装包。LAT 关闭模型、退出应用和卸载前都会停止 gateway 及其管理的 llama-server 进程。若旧版本进程仍在运行，请先关闭旧版 LAT 后再卸载。
+LAT 会使用 Hy-MT2 官方翻译指令模板，并对 URL、代码占位符和 LaTeX 公式进行保护。若输出仍包含指令文本，网关会执行质量检查并在允许时安全重试。长文档建议分段翻译，并确认模型已经完成加载。
 
-## References
+## 参考资料
 
-- Hy-MT2 技术报告：https://arxiv.org/html/2605.22064
-- Hy-MT2 官方仓库：https://github.com/Tencent-Hunyuan/Hy-MT2
-- Hy-MT2-7B-GGUF：https://huggingface.co/tencent/Hy-MT2-7B-GGUF
-- llama.cpp：https://github.com/ggml-org/llama.cpp
-- nextai-translator：https://github.com/nextai-translator/nextai-translator
-- Tauri 2：https://tauri.app/
+- [Hy-MT2 Technical Report v2](https://arxiv.org/html/2605.22064v2)
+- [Hy-MT2 官方 GitHub 仓库](https://github.com/Tencent-Hunyuan/Hy-MT2)
+- [Hy-MT2 官方 GGUF 模型集合](https://huggingface.co/collections/tencent/hy-mt2)
+- [Hy-MT2-7B-GGUF](https://huggingface.co/tencent/Hy-MT2-7B-GGUF)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp)
+- [nextai-translator](https://github.com/nextai-translator/nextai-translator)
+- [Tauri 2](https://tauri.app/)
 
 ## License
 
-LAT 当前尚未选择开源许可证。正式对外发布前，请在仓库中加入 LICENSE 文件并明确授权范围。
+LAT 当前尚未附带开源许可证。正式发布前，请在仓库根目录添加 `LICENSE` 并明确授权范围。

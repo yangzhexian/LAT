@@ -22,7 +22,7 @@ import type {
 } from "./types";
 import "./styles.css";
 
-const DOWNLOAD_MODEL = "hy-mt2-7b:q6_k";
+const DEFAULT_DOWNLOAD_MODEL = "hy-mt2-7b:q6_k";
 const EMPTY_DOWNLOAD_STATE: DownloadState = {
   busy: false,
   percent: 0,
@@ -53,6 +53,7 @@ export default function App() {
   const [screen, setScreen] = useState<AppScreen>("loading");
   const [status, setStatus] = useState<LocalStatus | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
+  const [downloadModel, setDownloadModel] = useState(DEFAULT_DOWNLOAD_MODEL);
   const [settings, setSettings] = usePersistentSettings();
   const [busy, setBusy] = useState(false);
   const [download, setDownload] = useState<DownloadState>(EMPTY_DOWNLOAD_STATE);
@@ -64,15 +65,27 @@ export default function App() {
   async function refresh() {
     const next = await getStatus();
     setStatus(next);
-    setSelectedModel(
-      (current) =>
-        current ||
-        next.active_model ||
-        next.resolved_model ||
-        next.models?.[0]?.name ||
-        "",
-    );
+    setSelectedModel((current) => {
+      const available = next.models?.some((model) => model.name === current);
+      if (current && available) return current;
+      if (next.active_model) return next.active_model;
+      if (next.model?.verified && next.resolved_model) return next.resolved_model;
+      return next.models?.[0]?.name || next.resolved_model || "";
+    });
     return next;
+  }
+
+  async function refreshSetup() {
+    const next = await refresh();
+    try {
+      const environment = await getDownloadEnvironment(next.resolved_model || downloadModel);
+      setDownload((current) => ({ ...current, environment }));
+      if (!downloadModel && environment.recommended_model) {
+        setDownloadModel(environment.recommended_model);
+      }
+    } catch {
+      // The download card can still render its installed-model state if GPU probing is unavailable.
+    }
   }
 
   useEffect(() => {
@@ -84,6 +97,13 @@ export default function App() {
           await setDataDirectory(settings.dataDirectory);
         }
         const next = await refresh();
+        try {
+          const environment = await getDownloadEnvironment(next.resolved_model || DEFAULT_DOWNLOAD_MODEL);
+          setDownload((current) => ({ ...current, environment }));
+          setDownloadModel(environment.recommended_model || next.resolved_model || DEFAULT_DOWNLOAD_MODEL);
+        } catch {
+          // GPU probing is advisory; model discovery remains usable if nvidia-smi is unavailable.
+        }
         setScreen(next.running_models?.length ? "translator" : "select");
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -112,7 +132,7 @@ export default function App() {
       await setDataDirectory(root);
       setDirectoryDraft(root);
       setSettings((current) => ({ ...current, dataDirectory: root }));
-      await refresh();
+      await refreshSetup();
       setDownload((current) => ({ ...current, error: "" }));
       return true;
     } catch (reason) {
@@ -202,71 +222,56 @@ export default function App() {
   async function downloadHyModel() {
     cancelRequestedRef.current = false;
     setBusy(true);
-    setDownload({
-      ...EMPTY_DOWNLOAD_STATE,
+    setDownload((current) => ({
+      ...current,
       busy: true,
+      percent: 0,
+      phase: "",
       status: "正在检测 GPU 总显存",
-    });
+      error: "",
+      speedMiB: 0,
+      fileIndex: 0,
+      fileCount: 0,
+      fileName: "",
+      cancelRequested: false,
+    }));
     setError("");
     try {
       if (!(await ensureDataDirectory()) || cancelRequestedRef.current) {
         setDownload((current) => ({ ...current, busy: false, status: "已取消" }));
         return;
       }
-      const environment = await getDownloadEnvironment();
-      if (cancelRequestedRef.current) {
-        setDownload((current) => ({ ...current, busy: false, status: "已取消" }));
-        return;
-      }
+      const environment = await getDownloadEnvironment(downloadModel);
       setDownload((current) => ({ ...current, environment, status: "准备下载" }));
       if (environment.status !== "ready") {
-        const detail = [
-          environment.message,
-          environment.suggestion,
-          "仍要继续下载吗？",
-        ]
+        const detail = [environment.message, environment.suggestion, "仍要继续下载吗？"]
           .filter(Boolean)
           .join("\n\n");
-        if (!window.confirm(detail)) {
+        if (!window.confirm(detail) || cancelRequestedRef.current) {
           setDownload((current) => ({ ...current, busy: false, status: "已取消" }));
           return;
         }
       }
-      if (cancelRequestedRef.current) {
-        setDownload((current) => ({ ...current, busy: false, status: "已取消" }));
-        return;
-      }
-      const outcome = await downloadModelStream(
-        DOWNLOAD_MODEL,
-        (event: DownloadEvent) => {
-          if (event.type === "error") {
-            setDownload((current) => ({
-              ...current,
-              error: event.message || "模型下载失败",
-            }));
-            return;
-          }
-          setDownload((current) => ({
-            ...current,
-            phase: event.phase || current.phase,
-            percent: event.percent ?? current.percent,
-            status: event.message || event.status || current.status,
-            speedMiB: event.speed_mib_per_second ?? current.speedMiB,
-            fileIndex: event.file_index ?? current.fileIndex,
-            fileCount: event.file_count ?? current.fileCount,
-            fileName: event.file_name ?? current.fileName,
-            cancelRequested:
-              event.status === "cancelled" ? false : current.cancelRequested,
-          }));
-        },
-      );
-      if (outcome === "cancelled") {
-        cancelRequestedRef.current = false;
+      const outcome = await downloadModelStream(downloadModel, (event: DownloadEvent) => {
+        if (event.type === "error") {
+          setDownload((current) => ({ ...current, error: event.message || "模型下载失败" }));
+          return;
+        }
         setDownload((current) => ({
           ...current,
-          status: "已取消",
-          cancelRequested: false,
+          phase: event.phase || current.phase,
+          percent: event.percent ?? current.percent,
+          status: event.message || event.status || current.status,
+          speedMiB: event.speed_mib_per_second ?? current.speedMiB,
+          fileIndex: event.file_index ?? current.fileIndex,
+          fileCount: event.file_count ?? current.fileCount,
+          fileName: event.file_name ?? current.fileName,
+          cancelRequested: event.status === "cancelled" ? false : current.cancelRequested,
         }));
+      });
+      if (outcome === "cancelled") {
+        cancelRequestedRef.current = false;
+        setDownload((current) => ({ ...current, status: "已取消", cancelRequested: false }));
         return;
       }
       const downloaded = await refresh();
@@ -278,7 +283,7 @@ export default function App() {
         }));
         return;
       }
-      await loadModel(DOWNLOAD_MODEL);
+      await loadModel(downloadModel);
       const next = await refresh();
       if (!next.ready) {
         setDownload((current) => ({
@@ -289,7 +294,7 @@ export default function App() {
         return;
       }
       setStatus(next);
-      setSelectedModel(DOWNLOAD_MODEL);
+      setSelectedModel(downloadModel);
       setScreen("translator");
     } catch (reason) {
       setDownload((current) => ({
@@ -299,11 +304,7 @@ export default function App() {
     } finally {
       cancelRequestedRef.current = false;
       setBusy(false);
-      setDownload((current) => ({
-        ...current,
-        busy: false,
-        cancelRequested: false,
-      }));
+      setDownload((current) => ({ ...current, busy: false, cancelRequested: false }));
     }
   }
 
@@ -322,11 +323,7 @@ export default function App() {
         <div className="error-icon">!</div>
         <h1>无法启动 LAT</h1>
         <p>{error}</p>
-        <button
-          type="button"
-          className="primary-button"
-          onClick={() => window.location.reload()}
-        >
+        <button type="button" className="primary-button" onClick={() => window.location.reload()}>
           重新连接
         </button>
       </section>
@@ -336,6 +333,7 @@ export default function App() {
       <ModelSelector
         status={status}
         selectedModel={selectedModel}
+        downloadModel={downloadModel}
         loading={busy}
         error={error}
         dataDirectory={settings.dataDirectory}
@@ -343,6 +341,7 @@ export default function App() {
         directoryDraft={directoryDraft}
         customDirectoryOpen={customDirectoryOpen}
         onSelect={setSelectedModel}
+        onSelectDownloadModel={setDownloadModel}
         onEnable={() => void enableSelectedModel()}
         onDownload={() => void downloadHyModel()}
         onCancelDownload={() => void stopDownload()}
@@ -352,7 +351,7 @@ export default function App() {
         onChooseDirectory={() => void chooseDirectory()}
         onRefresh={() => {
           setError("");
-          void refresh().catch((reason) => {
+          void refreshSetup().catch((reason) => {
             setError(reason instanceof Error ? reason.message : String(reason));
           });
         }}
@@ -364,9 +363,7 @@ export default function App() {
       <TranslatorWorkspace
         status={status}
         settings={settings}
-        onSettingsChange={(next) =>
-          setSettings((current) => ({ ...current, ...next }))
-        }
+        onSettingsChange={(next) => setSettings((current) => ({ ...current, ...next }))}
         onDisable={() => void disableModel()}
       />
     ) : null;
