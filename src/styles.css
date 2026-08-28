@@ -68,7 +68,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .model-card:hover, .model-card.selected { border-color: var(--accent); background: var(--panel-hover); }
 .model-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 20%, var(--control)); color: var(--accent-soft); font-size: 20px; }
 .model-copy { display: grid; gap: 5px; flex: 1; } .model-copy strong { font-size: 14px; } .model-copy small { color: var(--subtle); font-size: 12px; }
-.model-check { width: 20px; color: var(--accent-soft); font-size: 20px; }
 .error-banner { margin: 12px 0; padding: 15px; border-radius: 10px; color: var(--muted); background: var(--panel-raised); }
 .error-banner { border: 1px solid #813d53; color: #ffadb9; text-align: left; }
 .primary-button, .secondary-button { border: 0; border-radius: 8px; padding: 11px 18px; color: #f7fbff; font-weight: 700; }
@@ -85,8 +84,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .download-card-header > div { display: grid; gap: 5px; }
 .download-card-header strong { font-size: 14px; }
 .download-card-header small { color: var(--subtle); font-size: 12px; }
-.download-card-chevron { color: var(--muted); font-size: 18px; line-height: 1; transition: transform .15s ease; }
-.download-card[open] .download-card-chevron { transform: rotate(180deg); }
+.download-card-chevron { width: 8px; height: 8px; flex: 0 0 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; color: var(--muted); transform: rotate(45deg); transition: transform .15s ease; }
+.download-card[open] .download-card-chevron { transform: rotate(225deg); }
 .download-button { justify-self: end; padding: 9px 13px; }
 .environment-note { display: grid; gap: 5px; padding: 10px 12px; border-radius: 9px; background: var(--control); color: var(--muted); font-size: 12px; }
 .environment-note strong { color: var(--text); font-size: 12px; }
@@ -149,7 +148,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .translator-screen { padding: 0 14px 12px; }
   .pane-header select { max-width: 170px; }
 }
-.download-action-row { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+.download-action-row { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 7px; flex-wrap: wrap; }
 .download-action-row .custom-directory-toggle { margin-right: auto; }
 .cancel-button { border: 1px solid #b72f4d88; border-radius: 8px; padding: 9px 13px; background: transparent; color: #c33c59; font-size: 12px; font-weight: 700; }
 .cancel-button:hover { background: #b72f4d18; }

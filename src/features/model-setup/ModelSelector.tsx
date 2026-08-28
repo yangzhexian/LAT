@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { formatBytes } from "../../lib/text";
-import type { DownloadState, LocalModel, LocalStatus, ModelOption } from "../../types";
+import type { DownloadState, LocalStatus, ModelOption } from "../../types";
 
 interface ModelSelectorProps {
   status: LocalStatus | null;
@@ -23,11 +23,6 @@ interface ModelSelectorProps {
   onApplyDirectory: () => void;
   onChooseDirectory: () => void;
   onRefresh: () => void;
-}
-
-function modelLabel(model: LocalModel): string {
-  const quantization = model.details?.quantization_level;
-  return quantization ? model.name + " · " + quantization : model.name;
 }
 
 function optionLabel(option: ModelOption): string {
@@ -97,10 +92,9 @@ export function ModelSelector({
           >
             <span className="model-icon">◈</span>
             <span className="model-copy">
-              <strong>{modelLabel(model)}</strong>
+              <strong>{model.name}</strong>
               <small>{model.size ? formatBytes(model.size) : "未知大小"} · GGUF</small>
             </span>
-            <span className="model-check">{selectedModel === model.name ? "✓" : ""}</span>
           </button>
         ))}
       </div>
@@ -113,9 +107,8 @@ export function ModelSelector({
         <summary className="download-card-header">
           <div>
             <strong>下载 Hy-MT2 GGUF 模型</strong>
-            <small>运行时和模型会保存到本机数据目录</small>
           </div>
-          <span className="download-card-chevron" aria-hidden="true">⌄</span>
+          <span className="download-card-chevron" aria-hidden="true" />
         </summary>
         {downloadOptions.length > 0 && (
           <div className="model-download-picker">
@@ -141,7 +134,7 @@ export function ModelSelector({
                 {download.environment?.best_gpu && (
                   <>
                     {" · "}
-                    {download.environment.best_gpu.name} 总显存{" "}
+                    当前设备 {download.environment.best_gpu.name} 总显存{" "}
                     {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB
                   </>
                 )}
