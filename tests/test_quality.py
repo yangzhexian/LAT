@@ -21,6 +21,10 @@ class QualityTests(unittest.TestCase):
         protected = protect_text("你好")
         self.assertEqual(clean_model_output("译文：Hello", protected), "Hello")
 
+    def test_chinese_end_translation_marker_is_removed(self):
+        protected = protect_text("你好")
+        self.assertEqual(clean_model_output("Hello\n[结束翻译]", protected), "Hello")
+
     def test_latex_formulas_are_protected_and_restored(self):
         source = r"Text $x_i$ and $$y = x^2$$ plus \(z\) and \[w\]."
         protected = protect_text(source)

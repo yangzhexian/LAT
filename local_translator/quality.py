@@ -95,7 +95,7 @@ def clean_model_output(value: str, protected: ProtectedText) -> str:
         if marker in result:
             result = result.split(marker, 1)[1].lstrip(" \n:")
     result = re.split(
-        r"\n\s*(?:\[end translation\]|\[source text\]|translation tasks:)\s*",
+        r"\n\s*(?:\[end translation\]|\[结束翻译\]|\[source text\]|translation tasks:)\s*",
         result,
         maxsplit=1,
         flags=re.IGNORECASE,
