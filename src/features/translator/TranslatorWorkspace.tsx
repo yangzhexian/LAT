@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { translateStream } from "../../lib/api";
 import { languageName } from "../../lib/languages";
 import { normalizeForTranslation } from "../../lib/text";
@@ -26,7 +26,7 @@ function autoFontSize(value: string, enabled: boolean): number {
 function completedMetrics(metrics: TranslationMetrics | null): string {
   if (!metrics) return "";
   return [
-    metrics.tokens_per_second != null ? metrics.tokens_per_second.toFixed(2) + " tokens/s" : "",
+    metrics.tokens_per_second != null ? Math.round(metrics.tokens_per_second) + " tokens/s" : "",
     metrics.elapsed_ms != null ? (metrics.elapsed_ms / 1000).toFixed(1) + "s" : "",
     metrics.generated_tokens != null ? metrics.generated_tokens + " tokens" : "",
   ]
@@ -50,7 +50,7 @@ export function TranslatorWorkspace({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [progress, setProgress] = useState<StreamEvent | null>(null);
   const [metrics, setMetrics] = useState<TranslationMetrics | null>(null);
-  const progressUpdatedAtRef = useRef(0);
+
   const [message, setMessage] = useState("准备就绪");
 
   const sourceFontSize = autoFontSize(source, settings.autoFont);
@@ -73,7 +73,7 @@ export function TranslatorWorkspace({
     setTranslation("");
     setMetrics(null);
     setProgress(null);
-    progressUpdatedAtRef.current = 0;
+
     setMessage("模型正在生成译文…");
     try {
       const normalized = normalizeForTranslation(source, settings.removeLineBreaks);
@@ -84,29 +84,15 @@ export function TranslatorWorkspace({
           target_language: languageName(targetLanguage),
         },
         (event) => {
-          if (event.type === "progress") {
-            const now = Date.now();
-            if (progressUpdatedAtRef.current === 0 || now - progressUpdatedAtRef.current >= 1000) {
-              progressUpdatedAtRef.current = now;
-              setProgress(event);
-            }
-          }
+          if (event.type === "progress") setProgress(event);
           if (event.type === "retry") {
-            progressUpdatedAtRef.current = 0;
             setProgress(null);
             setMessage("正在安全重试");
           }
           if (event.type === "complete") {
-            const completedTokens =
-              typeof event.metrics?.generated_tokens === "number"
-                ? " · " + event.metrics.generated_tokens + " tokens"
-                : "";
             setTranslation(event.translation || "");
             setMetrics(event.metrics || null);
-            setMessage(
-              (event.quality_issues?.length ? "完成 存在质量提示" : "翻译完成") +
-                completedTokens,
-            );
+            setMessage(event.quality_issues?.length ? "完成 存在质量提示" : "翻译完成");
           }
           if (event.type === "error") {
             setMessage(event.message || "翻译失败");
@@ -120,7 +106,7 @@ export function TranslatorWorkspace({
     }
   }
 
-  const speed = progress?.tokens_per_second?.toFixed(2) || "0.00";
+  const speed = progress?.tokens_per_second != null ? Math.round(progress.tokens_per_second) : 0;
   const elapsed = progress?.elapsed_ms
     ? (progress.elapsed_ms / 1000).toFixed(1) + "s"
     : "准备中";

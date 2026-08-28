@@ -47,6 +47,21 @@ class TranslationEngine:
         }
 
     @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Estimate streamed token count without making a second model request."""
+        asian_count = sum(
+            1
+            for char in text
+            if (
+                0x2E80 <= ord(char) <= 0x9FFF
+                or 0xAC00 <= ord(char) <= 0xD7AF
+                or 0xF900 <= ord(char) <= 0xFAFF
+            )
+        )
+        other_count = max(0, len(text) - asian_count)
+        return max(1, asian_count + round(other_count / 4))
+
+    @staticmethod
     def _metrics(response: dict[str, Any], elapsed_ms: float | None = None) -> dict[str, Any]:
         eval_count = response.get("eval_count")
         eval_duration = response.get("eval_duration")
@@ -149,8 +164,10 @@ class TranslationEngine:
                 if isinstance(delta, str) and delta:
                     raw_parts.append(delta)
                     elapsed_ms = (time.perf_counter() - started) * 1000
-                    generated_chars = sum(map(len, raw_parts))
-                    estimated_tokens = max(1, round(generated_chars / 4))
+                    generated_text = "".join(raw_parts)
+                    generated_chars = len(generated_text)
+                    estimated_tokens = self._estimate_tokens(generated_text)
+
                     yield {
                         "type": "progress",
                         "generated_chars": generated_chars,

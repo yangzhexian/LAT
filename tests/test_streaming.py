@@ -34,6 +34,9 @@ class StreamingTests(unittest.TestCase):
         metrics = TranslationEngine._metrics({"eval_count": 3, "done_reason": "stop"}, 1000)
         self.assertEqual(metrics["tokens_per_second"], 3.0)
 
+    def test_estimate_tokens_handles_multilingual_output(self):
+        self.assertEqual(TranslationEngine._estimate_tokens("你好世界"), 4)
+        self.assertEqual(TranslationEngine._estimate_tokens("Hello world."), 3)
     def test_stream_buffers_and_returns_checked_translation(self):
         settings = Settings(retry_on_bad_output=False)
         engine = TranslationEngine(settings, manager=FakeManager())
