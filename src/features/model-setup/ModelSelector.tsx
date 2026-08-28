@@ -54,9 +54,12 @@ export function ModelSelector({
   const models = status?.models || [];
   const hasModels = models.length > 0;
   const [downloadOpen, setDownloadOpen] = useState(!hasModels);
+  const [modelSelectionOpen, setModelSelectionOpen] = useState(false);
   const downloadOptions = download.environment?.models || [];
   const selectedOption = downloadOptions.find((option) => option.id === downloadModel);
   const recommendedOption = downloadOptions.find((option) => option.recommended);
+  const selectedModelName =
+    models.find((model) => model.name === selectedModel)?.name || "请选择模型";
   const displayedDirectory = dataDirectory || defaultDataDirectory;
   const fileProgress =
     download.fileCount > 0
@@ -65,6 +68,7 @@ export function ModelSelector({
 
   useEffect(() => {
     setDownloadOpen(!hasModels);
+    setModelSelectionOpen(false);
   }, [hasModels]);
 
   return (
@@ -72,7 +76,6 @@ export function ModelSelector({
       <img className="hero-icon" src="/lat-icon.svg" alt="LAT" />
       <p className="eyebrow">LOCAL TRANSLATION WORKSPACE</p>
       <h1>选择本地模型</h1>
-      <p className="subtitle">模型不会离开本机 启用后即可进入 LAT 翻译工作区</p>
       <div className="service-pill">
         <span className={"status-dot " + (status?.runtime?.installed ? "ready" : "")} />
         {status?.runtime?.installed
@@ -82,25 +85,43 @@ export function ModelSelector({
           刷新
         </button>
       </div>
-      <div className="model-list">
-        {models.map((model) => (
-          <button
-            type="button"
-            key={model.name}
-            className={"model-card " + (selectedModel === model.name ? "selected" : "")}
-            onClick={() => onSelect(model.name)}
-          >
-            <span className="model-icon">◈</span>
-            <span className="model-copy">
-              <strong>{model.name}</strong>
-              <small>{model.size ? formatBytes(model.size) : "未知大小"} · GGUF</small>
-            </span>
-          </button>
-        ))}
-      </div>
+      {hasModels && (
+        <details
+          className="model-selection-card collapsible-card"
+          open={modelSelectionOpen}
+          onToggle={(event) => setModelSelectionOpen(event.currentTarget.open)}
+        >
+          <summary className="download-card-header">
+            <div>
+              <strong>选择模型</strong>
+              <small>{selectedModelName}</small>
+            </div>
+            <span className="collapsible-chevron" aria-hidden="true" />
+          </summary>
+          <div className="model-list">
+            {models.map((model) => (
+              <button
+                type="button"
+                key={model.name}
+                className={"model-card " + (selectedModel === model.name ? "selected" : "")}
+                onClick={() => {
+                  onSelect(model.name);
+                  setModelSelectionOpen(false);
+                }}
+              >
+                <span className="model-icon">◈</span>
+                <span className="model-copy">
+                  <strong>{model.name}</strong>
+                  <small>{model.size ? formatBytes(model.size) : "未知大小"} · GGUF</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
 
       <details
-        className="download-card"
+        className="download-card collapsible-card"
         open={downloadOpen}
         onToggle={(event) => setDownloadOpen(event.currentTarget.open)}
       >
@@ -108,7 +129,7 @@ export function ModelSelector({
           <div>
             <strong>下载 Hy-MT2 GGUF 模型</strong>
           </div>
-          <span className="download-card-chevron" aria-hidden="true" />
+          <span className="collapsible-chevron" aria-hidden="true" />
         </summary>
         {downloadOptions.length > 0 && (
           <div className="model-download-picker">

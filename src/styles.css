@@ -59,7 +59,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .hero-icon { display: block; width: 84px; height: 84px; margin: 0 auto; border-radius: 20px; box-shadow: 0 14px 40px #385caa44; }
 .eyebrow { margin: 26px 0 0; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .2em; }
 .caption { color: var(--subtle); font-size: 12px; }
-.service-pill { display: inline-flex; align-items: center; gap: 9px; margin: 24px 0 14px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 13px; }
+.service-pill { display: inline-flex; align-items: center; gap: 9px; margin: 12px 0 14px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 13px; }
 .status-dot { width: 8px; height: 8px; display: inline-block; border-radius: 50%; background: #66748b; }
 .status-dot.ready { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 15%, transparent); }
 .text-button { border: 0; padding: 0; background: transparent; color: var(--accent); font-size: 12px; }
@@ -76,16 +76,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .danger-button { background: #b72f4d; color: #fff; }
 .danger-button:hover { background: #ce3b5b; }
 .enable-button { min-width: 190px; margin-top: 7px; }
-.download-card { display: grid; gap: 12px; margin: 12px 0 14px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-raised); text-align: left; }
-.download-card > summary { list-style: none; cursor: pointer; }
-.download-card > summary::-webkit-details-marker { display: none; }
-.download-card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 5px; }
+.model-selection-card, .download-card { display: grid; gap: 12px; margin: 12px 0 14px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-raised); text-align: left; }
+.model-selection-card .model-list { margin: 0; }
+.collapsible-card > summary { list-style: none; cursor: pointer; }
+.collapsible-card > summary::-webkit-details-marker { display: none; }
+.collapsible-card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 5px; }
 .download-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .download-card-header > div { display: grid; gap: 5px; }
 .download-card-header strong { font-size: 14px; }
 .download-card-header small { color: var(--subtle); font-size: 12px; }
-.download-card-chevron { width: 8px; height: 8px; flex: 0 0 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; color: var(--muted); transform: rotate(45deg); transition: transform .15s ease; }
-.download-card[open] .download-card-chevron { transform: rotate(225deg); }
+.collapsible-chevron { width: 8px; height: 8px; flex: 0 0 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; color: var(--muted); transform: rotate(45deg); transition: transform .15s ease; }
+.collapsible-card[open] .collapsible-chevron { transform: rotate(225deg); }
 .download-button { justify-self: end; padding: 9px 13px; }
 .environment-note { display: grid; gap: 5px; padding: 10px 12px; border-radius: 9px; background: var(--control); color: var(--muted); font-size: 12px; }
 .environment-note strong { color: var(--text); font-size: 12px; }
