@@ -17,6 +17,7 @@ Use PowerShell from the repository root:
 - `Copy-Item translator.config.example.json translator.config.json` creates local configuration, then `python -m local_translator serve` starts the gateway at `127.0.0.1:8787`.
 - `python -m pip install -r requirements-build.txt; .\scripts\build-sidecar.ps1; npm run tauri dev` builds the Python sidecar and starts the desktop app. `npm run dev` runs only the Vite UI.
 - `npm run build` runs MathJax preparation, TypeScript checks, and the Vite production build. `npm run build:installer` creates the Windows NSIS installer.
+- Every new version must run `npm run build:installer`; the installer and `SHA256SUMS.txt` are written to `artifacts/v<version>`. Keep these generated artifacts out of commits.
 
 ## Coding Style & Testing Guidelines
 
