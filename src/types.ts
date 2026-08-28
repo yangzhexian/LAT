@@ -73,6 +73,20 @@ export interface DownloadEnvironment {
   suggestion: string;
 }
 
+export interface DownloadState {
+  busy: boolean;
+  percent: number;
+  phase: string;
+  status: string;
+  error: string;
+  speedMiB: number;
+  fileIndex: number;
+  fileCount: number;
+  fileName: string;
+  cancelRequested: boolean;
+  environment: DownloadEnvironment | null;
+}
+
 export interface DownloadEvent {
   type: "download" | "error";
   phase?: "runtime" | "model";

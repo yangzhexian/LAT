@@ -1,6 +1,6 @@
 [package]
 name = "hy-mt2-local-translator"
-version = "0.1.1-beta.5"
+version = "0.1.1-beta.6"
 description = "LAT local llama.cpp translation desktop app"
 authors = ["LLM-Translate"]
 edition = "2021"

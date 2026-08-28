@@ -9,10 +9,12 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from .catalog import MODEL_ID
 from .config import Settings
-from .environment import DOWNLOAD_MODEL, inspect_download_environment
+from .environment import inspect_download_environment
 from .engine import TranslationEngine, TranslationOutputError, TranslationRequestError
-from .llama_client import DownloadCancelled, LlamaError
+from .errors import DownloadCancelled, LlamaError
+from .version import __version__
 
 
 LOGGER = logging.getLogger(__name__)
@@ -47,7 +49,7 @@ class App:
 
 
 class RequestHandler(BaseHTTPRequestHandler):
-    server_version = "LATLocalTranslator/0.2"
+    server_version = f"LATLocalTranslator/{__version__}"
 
     @property
     def app(self) -> App:
@@ -175,9 +177,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json(500, {"error": {"message": str(error), "type": "internal_error"}})
 
     def _stream_download(self, body: dict[str, Any]) -> None:
-        requested_model = body.get("model", DOWNLOAD_MODEL)
-        if requested_model != DOWNLOAD_MODEL:
-            raise TranslationRequestError(f"当前下载入口只支持 {DOWNLOAD_MODEL}")
+        requested_model = body.get("model", MODEL_ID)
+        if requested_model != MODEL_ID:
+            raise TranslationRequestError(f"当前下载入口只支持 {MODEL_ID}")
         self.send_response(200)
         self._headers("text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")

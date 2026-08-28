@@ -17,13 +17,10 @@ class Settings:
 
     host: str = "127.0.0.1"
     port: int = 8787
-    model_name: str = "hy-mt2-7b:q6_k"
     model_dir: str = ""
     runtime_root: str = ""
     llama_runtime_variant: str = "cuda-13.3"
     llama_release: str = "b10545"
-    unload_on_exit: bool = True
-    keep_alive: str = "10m"
     request_timeout_seconds: float = 600.0
     max_input_chars: int = 16000
     max_output_tokens: int = 4096
@@ -57,12 +54,10 @@ class Settings:
         mapping = {
             "host": ("LLM_TRANSLATOR_HOST", str),
             "port": ("LLM_TRANSLATOR_PORT", int),
-            "model_name": ("LAT_MODEL_NAME", str),
             "model_dir": ("LAT_MODEL_DIR", str),
             "runtime_root": ("LAT_RUNTIME_ROOT", str),
             "llama_runtime_variant": ("LAT_LLAMA_RUNTIME_VARIANT", str),
             "llama_release": ("LAT_LLAMA_RELEASE", str),
-            "keep_alive": ("LLM_TRANSLATOR_KEEP_ALIVE", str),
             "request_timeout_seconds": ("LLM_TRANSLATOR_TIMEOUT", float),
             "max_input_chars": ("LLM_TRANSLATOR_MAX_INPUT_CHARS", int),
             "max_output_tokens": ("LLM_TRANSLATOR_MAX_OUTPUT_TOKENS", int),
@@ -79,13 +74,9 @@ class Settings:
             if raw is not None and raw != "":
                 setattr(self, attribute, converter(raw))
 
-        for attribute, name in (
-            ("unload_on_exit", "LLM_TRANSLATOR_UNLOAD_ON_EXIT"),
-            ("retry_on_bad_output", "LLM_TRANSLATOR_RETRY_ON_BAD_OUTPUT"),
-        ):
-            raw = os.environ.get(name)
-            if raw is not None:
-                setattr(self, attribute, raw.strip().lower() not in {"0", "false", "no", "off"})
+        raw = os.environ.get("LLM_TRANSLATOR_RETRY_ON_BAD_OUTPUT")
+        if raw is not None:
+            self.retry_on_bad_output = raw.strip().lower() not in {"0", "false", "no", "off"}
 
     @property
     def resolved_data_root(self) -> Path:

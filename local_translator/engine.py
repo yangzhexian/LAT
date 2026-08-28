@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import Settings
-from .llama_client import LlamaCppProcessManager, LlamaError
+from .errors import LlamaError
 from .prompts import build_translation_prompt, parse_translation_input
 from .quality import clean_model_output, is_fatal, protect_text, quality_issues
+from .runtime import LlamaCppProcessManager
 
 
 class TranslationRequestError(ValueError):
@@ -52,6 +53,8 @@ class TranslationEngine:
         tokens_per_second = None
         if isinstance(eval_count, (int, float)) and isinstance(eval_duration, (int, float)) and eval_duration > 0:
             tokens_per_second = round(float(eval_count) / float(eval_duration) * 1_000_000_000, 2)
+        elif isinstance(eval_count, (int, float)) and elapsed_ms is not None and elapsed_ms > 0:
+            tokens_per_second = round(float(eval_count) / elapsed_ms * 1000, 2)
         metrics: dict[str, Any] = {
             "generated_tokens": eval_count,
             "eval_duration_ns": eval_duration,
@@ -92,7 +95,6 @@ class TranslationEngine:
                 model,
                 [{"role": "user", "content": current_prompt}],
                 self._options(retry=attempt > 0),
-                keep_alive=self.settings.keep_alive,
             )
             message = response.get("message")
             raw = message.get("content", "") if isinstance(message, dict) else ""
@@ -141,7 +143,6 @@ class TranslationEngine:
                 model,
                 [{"role": "user", "content": current_prompt}],
                 self._options(retry=attempt > 0),
-                keep_alive=self.settings.keep_alive,
             ):
                 message = event.get("message")
                 delta = message.get("content", "") if isinstance(message, dict) else ""

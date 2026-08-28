@@ -10,7 +10,7 @@ class FakeLlamaClient:
     def resolve_model(self):
         return self.active_model
 
-    def chat_stream(self, model, messages, options, keep_alive=None):
+    def chat_stream(self, model, messages, options):
         yield {"message": {"content": "Hello"}}
         yield {
             "message": {"content": " world."},
@@ -30,6 +30,10 @@ class FakeManager:
 
 
 class StreamingTests(unittest.TestCase):
+    def test_metrics_fall_back_to_wall_clock_time(self):
+        metrics = TranslationEngine._metrics({"eval_count": 3, "done_reason": "stop"}, 1000)
+        self.assertEqual(metrics["tokens_per_second"], 3.0)
+
     def test_stream_buffers_and_returns_checked_translation(self):
         settings = Settings(retry_on_bad_output=False)
         engine = TranslationEngine(settings, manager=FakeManager())

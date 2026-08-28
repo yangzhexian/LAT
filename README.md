@@ -4,7 +4,7 @@ LAT 是一个面向 Windows 的本地 AI 翻译桌面应用。它基于 Tauri 2�
 
 模型和翻译内容都留在本机，不调用云端翻译服务。
 
-> 当前状态：0.1.1 Beta
+> 当前状态：0.1.1 Beta 6
 >
 > 安装包不包含模型权重和 llama.cpp。首次使用时，LAT 会在用户选择的本地目录中自动下载并校验它们。
 
@@ -69,7 +69,7 @@ python -m local_translator serve
 
 ~~~powershell
 npm install
-python -m pip install pyinstaller
+python -m pip install -r requirements-build.txt
 .\scripts\build-sidecar.ps1
 npm run tauri dev
 ~~~
@@ -91,15 +91,14 @@ npm run dev
 ## Build Windows installer
 
 ~~~powershell
-python -m pip install pyinstaller
-.\scripts\build-sidecar.ps1
-npm run tauri build
+python -m pip install -r requirements-build.txt
+npm run build:installer
 ~~~
 
-当前 Beta 安装包版本为 0.1.1-beta.5。生成文件位于：
+当前 Beta 安装包版本为 0.1.1-beta.6。可上传的安装包和 SHA-256 校验文件位于：
 
 ~~~text
-src-tauri/target/release/bundle/nsis/
+artifacts/v0.1.1-beta.6/
 ~~~
 
 构建过程会生成不纳入 Git 的 sidecar、Tauri target、前端 dist 和 MathJax 运行时文件。卸载或更新时会询问是否删除模型、llama.cpp 运行时、下载缓存和日志，默认保留这些数据。
@@ -129,7 +128,6 @@ D:\Tools\LAT\data\
 | runtime_root | 空 | llama.cpp 和模型数据目录 |
 | llama_runtime_variant | cuda-13.3 | Windows CUDA 运行时变体 |
 | llama_release | b10545 | 固定的 llama.cpp Release |
-| model_name | hy-mt2-7b:q6_k | 模型标识 |
 | temperature | 0.7 | Hy-MT2 推荐温度 |
 | top_p | 0.6 | Top-p 采样参数 |
 | top_k | 20 | Top-k 采样参数 |
@@ -177,10 +175,10 @@ Model: hy-mt2-7b:q6_k
 python -m local_translator status
 
 # 关闭模型并释放显存
-.\unload-translator-model.ps1
+.\scripts\unload-translator-model.ps1
 
 # 停止网关和模型进程
-.\stop-translator.ps1
+.\scripts\stop-translator.ps1
 
 # 执行一次本地翻译
 python -m local_translator translate --to English "你好，世界。"
@@ -192,19 +190,23 @@ python -m local_translator translate --to English "你好，世界。"
 
 ~~~powershell
 python -m unittest discover -s tests -v
+npm run check:version
 npm run typecheck
 npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
 ~~~
 
 ## Repository layout
 
 ~~~text
-local_translator/       Python 网关、llama.cpp 客户端和翻译质量策略
-src/                    Tauri 前端和翻译工作区
+local_translator/       Python 网关、下载器、llama.cpp 客户端和运行时管理
+src/features/           模型安装和翻译工作区功能模块
+src/lib/                API、设置、语言和文本处理工具
 src-tauri/              Tauri 2 Rust 工程、图标和 NSIS hooks
-scripts/                sidecar 和 MathJax 构建脚本
+scripts/                sidecar、安装包、版本检查和本地控制脚本
 tests/                  Python 自动化测试
 public/                 前端静态资源和 LAT 图标
+docs/releases/          可直接用于 GitHub Prerelease 的发布说明
 translator.config.example.json
                         可提交的配置模板
 ~~~
@@ -222,6 +224,7 @@ translator.config.example.json
 - src-tauri/target/
 - src-tauri/binaries/*.exe
 - public/mathjax/ 中生成的 MathJax 文件
+- artifacts/ 中生成的安装包和校验文件
 
 提交信息遵循 Conventional Commits：
 

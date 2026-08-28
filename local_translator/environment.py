@@ -4,8 +4,8 @@ import csv
 import subprocess
 from typing import Any
 
+from .catalog import MODEL_ID
 
-DOWNLOAD_MODEL = "hy-mt2-7b:q6_k"
 REQUIRED_VRAM_GIB = 10.0
 
 
@@ -54,7 +54,7 @@ def detect_nvidia_gpus() -> list[dict[str, Any]]:
     return gpus
 
 
-def inspect_download_environment(model: str = DOWNLOAD_MODEL) -> dict[str, Any]:
+def inspect_download_environment(model: str = MODEL_ID) -> dict[str, Any]:
     gpus = detect_nvidia_gpus()
     result: dict[str, Any] = {
         "model": model,

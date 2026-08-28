@@ -9,7 +9,7 @@ from typing import Any
 
 from .config import Settings
 from .engine import TranslationEngine, TranslationRequestError
-from .llama_client import LlamaError
+from .errors import LlamaError
 from .server import serve
 
 

@@ -1,87 +1,19 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import logging
-import os
-import shutil
-import socket
-import subprocess
-import tempfile
-import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import zipfile
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Iterator
 
+from .catalog import MODEL_ID
 from .config import Settings
-
-
-LOGGER = logging.getLogger(__name__)
-MODEL_ID = "hy-mt2-7b:q6_k"
-MODEL_FILENAME = "HY-MT2-7B-Q6_K.gguf"
-MODEL_URL = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/HY-MT2-7B-Q6_K.gguf?download=true"
-MODEL_URLS = (
-    MODEL_URL,
-    "https://hf-mirror.com/tencent/Hy-MT2-7B-GGUF/resolve/main/HY-MT2-7B-Q6_K.gguf?download=true",
-)
-MODEL_SIZE = 6_164_482_720
-MODEL_SHA256 = "88ef0aba59952a4cfe4be36cb5baf797dbb370bc60e9dcbd7297036021e52831"
-RUNTIME_ASSETS: dict[str, tuple[dict[str, str], ...]] = {
-    "cuda-13.3": (
-        {
-            "name": "llama-server",
-            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10545/llama-b10545-bin-win-cuda-13.3-x64.zip",
-            "sha256": "59e053f64837d6da766708272f6b814ddcf8286acf39e3a4632fcc535a3fa1b5",
-        },
-        {
-            "name": "cuda-runtime",
-            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10545/cudart-llama-bin-win-cuda-13.3-x64.zip",
-            "sha256": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e",
-        },
-    ),
-    "cuda-12.4": (
-        {
-            "name": "llama-server",
-            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10545/llama-b10545-bin-win-cuda-12.4-x64.zip",
-            "sha256": "7caaceb18f9b3af89ff06482f6142c68d2fe384e1f55a352a129fdeb41529121",
-        },
-        {
-            "name": "cuda-runtime",
-            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10545/cudart-llama-bin-win-cuda-12.4-x64.zip",
-            "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
-        },
-    ),
-}
-
-
-class LlamaError(RuntimeError):
-    pass
-
-
-class DownloadCancelled(LlamaError):
-    pass
-
-
-class LlamaHTTPError(LlamaError):
-    def __init__(self, status: int, message: str):
-        super().__init__(message)
-        self.status = status
-
-
-@dataclass(frozen=True)
-class DownloadAsset:
-    name: str
-    url: str
-    sha256: str
-    size: int | None = None
+from .errors import LlamaError, LlamaHTTPError
 
 
 class LlamaServerClient:
+    """Small OpenAI-compatible client for the managed llama-server process."""
+
     def __init__(self, base_url: str, settings: Settings):
         self.base_url = base_url.rstrip("/")
         self.settings = settings
@@ -131,10 +63,8 @@ class LlamaServerClient:
         except LlamaError:
             return False
 
-    def version(self) -> dict[str, Any]:
-        return self._request("GET", "/props", timeout=5.0)
-
-    def resolve_model(self) -> str:
+    @staticmethod
+    def resolve_model() -> str:
         return MODEL_ID
 
     def chat(
@@ -142,7 +72,6 @@ class LlamaServerClient:
         model: str,
         messages: list[dict[str, str]],
         options: dict[str, Any],
-        keep_alive: str | int | None = None,
     ) -> dict[str, Any]:
         payload = {
             "model": model,
@@ -157,17 +86,17 @@ class LlamaServerClient:
         }
         response = self._request("POST", "/v1/chat/completions", payload)
         choices = response.get("choices")
-        content = ""
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            message = choices[0].get("message")
-            if isinstance(message, dict) and isinstance(message.get("content"), str):
-                content = message["content"]
+        first_choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+        message = first_choice.get("message")
+        content = message.get("content", "") if isinstance(message, dict) else ""
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+        timings = response.get("timings") if isinstance(response.get("timings"), dict) else {}
+        predicted_ms = timings.get("predicted_ms")
         return {
-            "message": {"content": content},
+            "message": {"content": content if isinstance(content, str) else ""},
             "eval_count": usage.get("completion_tokens"),
-            "eval_duration": response.get("timings", {}).get("predicted_ms", 0) * 1_000_000 if isinstance(response.get("timings"), dict) else None,
-            "done_reason": choices[0].get("finish_reason") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None,
+            "eval_duration": predicted_ms * 1_000_000 if isinstance(predicted_ms, (int, float)) else None,
+            "done_reason": first_choice.get("finish_reason"),
         }
 
     def chat_stream(
@@ -175,7 +104,6 @@ class LlamaServerClient:
         model: str,
         messages: list[dict[str, str]],
         options: dict[str, Any],
-        keep_alive: str | int | None = None,
     ) -> Iterator[dict[str, Any]]:
         payload = {
             "model": model,
@@ -199,14 +127,21 @@ class LlamaServerClient:
         try:
             with urllib.request.urlopen(request, timeout=self.settings.request_timeout_seconds) as response:
                 usage: dict[str, Any] = {}
+                done_reason: str | None = None
+                done_emitted = False
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
-                        yield {"done": True, "eval_count": usage.get("completion_tokens")}
-                        continue
+                        yield {
+                            "done": True,
+                            "done_reason": done_reason,
+                            "eval_count": usage.get("completion_tokens"),
+                        }
+                        done_emitted = True
+                        break
                     try:
                         event = json.loads(data)
                     except json.JSONDecodeError as error:
@@ -223,432 +158,16 @@ class LlamaServerClient:
                     content = delta.get("content", "") if isinstance(delta, dict) else ""
                     if isinstance(content, str) and content:
                         yield {"message": {"content": content}}
-                    if choice.get("finish_reason") is not None:
-                        yield {"done": True, "done_reason": choice.get("finish_reason"), "eval_count": usage.get("completion_tokens")}
+                    if isinstance(choice.get("finish_reason"), str):
+                        done_reason = choice["finish_reason"]
+                if not done_emitted:
+                    yield {
+                        "done": True,
+                        "done_reason": done_reason,
+                        "eval_count": usage.get("completion_tokens"),
+                    }
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
             raise LlamaHTTPError(error.code, detail or str(error)) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise LlamaError(f"llama.cpp 流式连接失败 ({self.base_url}): {error}") from error
-
-
-class LlamaCppProcessManager:
-    def __init__(self, settings: Settings):
-        self.settings = settings
-        self.owned_process: subprocess.Popen[Any] | None = None
-        self.server_port: int | None = None
-        self.client: LlamaServerClient | None = None
-        self.download_cancel_event = threading.Event()
-        self.download_lock = threading.Lock()
-        self.download_response: Any | None = None
-        self._remember_data_root(settings.resolved_data_root)
-
-    def set_data_root(self, root: str) -> dict[str, Any]:
-        path = Path(root).expanduser().resolve()
-        path.mkdir(parents=True, exist_ok=True)
-        self.shutdown()
-        self.settings.runtime_root = str(path)
-        self.settings.model_dir = ""
-        self._remember_data_root(path)
-        return self.status()
-
-    @staticmethod
-    def _remember_data_root(path: Path) -> None:
-        if os.name != "nt":
-            return
-        try:
-            import winreg
-
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\LAT") as key:
-                winreg.SetValueEx(key, "DataRoot", 0, winreg.REG_SZ, str(path))
-        except (ImportError, OSError):
-            LOGGER.debug("unable to persist LAT data root", exc_info=True)
-
-    def cancel_download(self) -> None:
-        self.download_cancel_event.set()
-        response = self.download_response
-        if response is not None:
-            try:
-                response.close()
-            except (OSError, ValueError):
-                pass
-
-    @property
-    def runtime_assets(self) -> tuple[DownloadAsset, ...]:
-        assets = RUNTIME_ASSETS.get(self.settings.llama_runtime_variant)
-        if assets is None:
-            raise LlamaError(f"不支持的 llama.cpp 运行时版本: {self.settings.llama_runtime_variant}")
-        return tuple(DownloadAsset(**item) for item in assets)
-
-    def _server_executable(self) -> Path | None:
-        root = self.settings.resolved_runtime_dir
-        if not root.exists():
-            return None
-        direct = root / "llama-server.exe"
-        if direct.exists():
-            return direct
-        matches = list(root.rglob("llama-server.exe"))
-        return matches[0] if matches else None
-
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-
-    def _verified(self, path: Path, expected_size: int | None, expected_sha256: str) -> bool:
-        if not path.exists() or (expected_size is not None and path.stat().st_size != expected_size):
-            return False
-        marker = path.with_suffix(path.suffix + ".sha256")
-        if marker.exists():
-            return marker.read_text(encoding="utf-8").strip().lower() == expected_sha256.lower()
-        return False
-
-    def _download_asset(
-        self,
-        asset: DownloadAsset,
-        destination: Path,
-        phase: str,
-        file_index: int | None = None,
-        file_count: int | None = None,
-    ) -> Iterator[dict[str, Any]]:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        metadata = {
-            "file_index": file_index,
-            "file_count": file_count,
-            "file_name": asset.name,
-        }
-
-        def emit(status: str, **values: Any) -> dict[str, Any]:
-            return {"type": "download", "phase": phase, "status": status, **metadata, **values}
-
-        if self._verified(destination, asset.size, asset.sha256):
-            size = destination.stat().st_size
-            yield emit("already_present", percent=100.0, completed_bytes=size, total_bytes=size, speed_bytes_per_second=0.0, speed_mib_per_second=0.0)
-            return
-        if self.download_cancel_event.is_set():
-            raise DownloadCancelled("下载已取消")
-
-        partial = destination.with_suffix(destination.suffix + ".part")
-        total_bytes = asset.size
-        started = time.monotonic()
-        retry_count = 0
-        while True:
-            if self.download_cancel_event.is_set():
-                raise DownloadCancelled("下载已取消")
-            current = partial.stat().st_size if partial.exists() else 0
-            headers = {"User-Agent": "LAT/0.1.1-beta.5"}
-            if current:
-                headers["Range"] = f"bytes={current}-"
-            request = urllib.request.Request(asset.url, headers=headers)
-            try:
-                response = urllib.request.urlopen(request, timeout=30.0)
-                status_code = getattr(response, "status", 200)
-                if current and status_code != 206:
-                    current = 0
-                    partial.unlink(missing_ok=True)
-                mode = "ab" if current else "wb"
-                if total_bytes is None:
-                    try:
-                        content_length = int(response.headers.get("Content-Length", "0"))
-                    except (TypeError, ValueError):
-                        content_length = 0
-                    if content_length:
-                        total_bytes = content_length + current
-
-                self.download_response = response
-                completed = current
-                try:
-                    with response, partial.open(mode) as handle:
-                        yield emit(
-                            "connecting",
-                            percent=round(completed * 100 / total_bytes, 1) if total_bytes else 0.0,
-                            completed_bytes=completed,
-                            total_bytes=total_bytes,
-                            speed_bytes_per_second=round(completed / max(time.monotonic() - started, 0.001), 1),
-                            speed_mib_per_second=round(completed / max(time.monotonic() - started, 0.001) / (1024 * 1024), 3),
-                            retry_count=retry_count,
-                        )
-                        while True:
-                            if self.download_cancel_event.is_set():
-                                raise DownloadCancelled("下载已取消 已保留已下载内容")
-                            try:
-                                chunk = response.read(1024 * 1024)
-                            except (TimeoutError, socket.timeout, urllib.error.URLError, OSError, ValueError) as error:
-                                if self.download_cancel_event.is_set():
-                                    raise DownloadCancelled("下载已取消 已保留已下载内容") from error
-                                raise LlamaError(f"下载 {asset.name} 响应中断: {error}") from error
-                            if not chunk:
-                                break
-                            handle.write(chunk)
-                            completed += len(chunk)
-                            elapsed = max(time.monotonic() - started, 0.001)
-                            speed = completed / elapsed
-                            percent = min(100.0, completed * 100 / total_bytes) if total_bytes else 0.0
-                            yield emit(
-                                "downloading",
-                                percent=round(percent, 1),
-                                completed_bytes=completed,
-                                total_bytes=total_bytes,
-                                speed_bytes_per_second=round(speed, 1),
-                                speed_mib_per_second=round(speed / (1024 * 1024), 3),
-                                retry_count=retry_count,
-                            )
-                finally:
-                    self.download_response = None
-
-                if self.download_cancel_event.is_set():
-                    raise DownloadCancelled("下载已取消 已保留已下载内容")
-                completed = partial.stat().st_size
-                if asset.size is not None and completed != asset.size:
-                    raise LlamaError(f"下载提前结束 {completed}/{asset.size} bytes")
-                if total_bytes is not None and completed < total_bytes:
-                    raise LlamaError(f"下载提前结束 {completed}/{total_bytes} bytes")
-                digest = self._sha256(partial)
-                if digest.lower() != asset.sha256.lower():
-                    raise LlamaError("SHA-256 校验失败 下载内容可能不完整")
-                os.replace(partial, destination)
-                destination.with_suffix(destination.suffix + ".sha256").write_text(asset.sha256, encoding="utf-8")
-                elapsed = max(time.monotonic() - started, 0.001)
-                speed = completed / elapsed
-                yield emit(
-                    "verified",
-                    percent=100.0,
-                    completed_bytes=completed,
-                    total_bytes=total_bytes or completed,
-                    speed_bytes_per_second=round(speed, 1),
-                    speed_mib_per_second=round(speed / (1024 * 1024), 3),
-                    sha256=digest,
-                    retry_count=retry_count,
-                )
-                return
-            except DownloadCancelled:
-                self.download_response = None
-                raise
-            except urllib.error.HTTPError as error:
-                self.download_response = None
-                if error.code < 500:
-                    raise LlamaError(f"下载 {asset.name} 失败 HTTP {error.code}") from error
-                failure: Exception = error
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError, LlamaError) as error:
-                self.download_response = None
-                failure = error
-
-            if retry_count >= 5:
-                raise LlamaError(f"下载 {asset.name} 失败 已重试 {retry_count} 次: {failure}") from failure
-            retry_count += 1
-            delay = min(8.0, 1.5 * (2 ** (retry_count - 1)))
-            LOGGER.warning("download %s interrupted, retry %s/%s in %.1fs: %s", asset.name, retry_count, 5, delay, failure)
-            yield emit(
-                "retrying",
-                percent=round(current * 100 / total_bytes, 1) if total_bytes else 0.0,
-                completed_bytes=current,
-                total_bytes=total_bytes,
-                speed_bytes_per_second=round(current / max(time.monotonic() - started, 0.001), 1),
-                speed_mib_per_second=round(current / max(time.monotonic() - started, 0.001) / (1024 * 1024), 3),
-                retry_count=retry_count,
-                message=f"网络波动 正在重试 {retry_count}/5",
-            )
-            for _ in range(max(1, round(delay * 10))):
-                if self.download_cancel_event.is_set():
-                    raise DownloadCancelled("下载已取消 已保留已下载内容")
-                time.sleep(0.1)
-
-    def _download_model(
-        self,
-        destination: Path,
-        file_index: int,
-        file_count: int,
-    ) -> Iterator[dict[str, Any]]:
-        last_error: LlamaError | None = None
-        for source_index, url in enumerate(MODEL_URLS):
-            asset = DownloadAsset(MODEL_FILENAME, url, MODEL_SHA256, MODEL_SIZE)
-            try:
-                yield from self._download_asset(asset, destination, "model", file_index, file_count)
-                return
-            except DownloadCancelled:
-                raise
-            except LlamaError as error:
-                last_error = error
-                if source_index >= len(MODEL_URLS) - 1:
-                    raise
-                destination.with_suffix(destination.suffix + ".part").unlink(missing_ok=True)
-                LOGGER.warning(
-                    "model source failed, switching source %s/%s: %s",
-                    source_index + 1,
-                    len(MODEL_URLS),
-                    error,
-                )
-                yield {
-                    "type": "download",
-                    "phase": "model",
-                    "status": "switching_source",
-                    "percent": 0.0,
-                    "completed_bytes": 0,
-                    "total_bytes": MODEL_SIZE,
-                    "file_index": file_index,
-                    "file_count": file_count,
-                    "file_name": MODEL_FILENAME,
-                    "message": f"当前下载源不可用 正在切换备用源 {source_index + 2}/{len(MODEL_URLS)}",
-                }
-        if last_error is not None:
-            raise last_error
-        raise LlamaError("没有可用的模型下载源")
-
-    def _extract_runtime(self, archives: list[Path]) -> None:
-        stage = Path(tempfile.mkdtemp(prefix="lat-llama-", dir=str(self.settings.resolved_data_root)))
-        try:
-            for archive in archives:
-                with zipfile.ZipFile(archive) as bundle:
-                    for item in bundle.infolist():
-                        target = (stage / item.filename).resolve()
-                        try:
-                            safe = os.path.commonpath([str(stage.resolve()), str(target)]) == str(stage.resolve())
-                        except ValueError:
-                            safe = False
-                        if not safe:
-                            raise LlamaError("运行时压缩包包含不安全路径")
-                    bundle.extractall(stage)
-            server = next(iter(stage.rglob("llama-server.exe")), None)
-            if server is None:
-                raise LlamaError("运行时压缩包中没有 llama-server.exe")
-            destination = self.settings.resolved_runtime_dir
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(stage, destination)
-        finally:
-            shutil.rmtree(stage, ignore_errors=True)
-
-    def install_stream(self) -> Iterator[dict[str, Any]]:
-        if not self.download_lock.acquire(blocking=False):
-            raise LlamaError("已有下载任务正在运行")
-        self.download_cancel_event.clear()
-        try:
-            self.settings.resolved_data_root.mkdir(parents=True, exist_ok=True)
-            assets = self.runtime_assets
-            file_count = len(assets) + 1
-            if self._server_executable() is None:
-                archives: list[Path] = []
-                for index, asset in enumerate(assets, start=1):
-                    archive = self.settings.resolved_data_root / "downloads" / f"{asset.name}.zip"
-                    archives.append(archive)
-                    yield from self._download_asset(asset, archive, "runtime", index, file_count)
-                self._extract_runtime(archives)
-                yield {"type": "download", "phase": "runtime", "status": "installed", "percent": 100.0, "file_index": len(assets), "file_count": file_count, "file_name": "llama.cpp runtime"}
-            else:
-                yield {"type": "download", "phase": "runtime", "status": "already_present", "percent": 100.0, "file_index": len(assets), "file_count": file_count, "file_name": "llama.cpp runtime"}
-
-            yield from self._download_model(self.settings.resolved_model_path, file_count, file_count)
-            if not self._verified(self.settings.resolved_model_path, MODEL_SIZE, MODEL_SHA256):
-                raise LlamaError("模型下载完成但校验未通过")
-            yield {"type": "download", "phase": "model", "status": "installed", "percent": 100.0, "file_index": file_count, "file_count": file_count, "file_name": MODEL_FILENAME}
-            yield {"type": "download", "phase": "model", "status": "complete", "percent": 100.0, "file_index": file_count, "file_count": file_count, "file_name": MODEL_FILENAME, "message": "全部文件下载并校验完成"}
-        finally:
-            self.download_lock.release()
-
-    def _choose_port(self) -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return int(sock.getsockname()[1])
-
-    def ensure_server(self) -> LlamaServerClient:
-        if self.owned_process is not None and self.owned_process.poll() is None and self.client is not None and self.client.is_ready():
-            return self.client
-        executable = self._server_executable()
-        model_path = self.settings.resolved_model_path
-        if executable is None:
-            raise LlamaError("尚未安装 llama.cpp 运行时 请先在启动界面安装")
-        if not self._verified(model_path, MODEL_SIZE, MODEL_SHA256):
-            raise LlamaError("尚未安装或校验 Hy-MT2-7B Q6_K 模型")
-        self.settings.resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
-        port = self._choose_port()
-        log_handle = self.settings.resolved_log_file.open("ab")
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        command = [
-            str(executable),
-            "-m", str(model_path),
-            "--host", "127.0.0.1",
-            "--port", str(port),
-            "--jinja",
-            "-ngl", "999",
-            "-c", str(self.settings.num_ctx),
-        ]
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(executable.parent),
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                creationflags=creationflags,
-            )
-        except OSError as error:
-            log_handle.close()
-            raise LlamaError(f"启动 llama.cpp 失败: {error}") from error
-        log_handle.close()
-        self.owned_process = process
-        self.server_port = port
-        self.client = LlamaServerClient(f"http://127.0.0.1:{port}", self.settings)
-        deadline = time.monotonic() + 90.0
-        while time.monotonic() < deadline:
-            if self.client.is_ready():
-                return self.client
-            if process.poll() is not None:
-                raise LlamaError(f"llama.cpp 启动失败 退出码 {process.returncode} 请查看 {self.settings.resolved_log_file}")
-            time.sleep(0.25)
-        self.shutdown()
-        raise LlamaError(f"llama.cpp 启动超时 请查看 {self.settings.resolved_log_file}")
-
-    def shutdown(self) -> None:
-        self.cancel_download()
-        process = self.owned_process
-        self.owned_process = None
-        self.client = None
-        self.server_port = None
-        if process is None or process.poll() is not None:
-            return
-        try:
-            process.terminate()
-            process.wait(timeout=8)
-        except (subprocess.TimeoutExpired, OSError):
-            try:
-                process.kill()
-            except OSError:
-                pass
-
-    def status(self) -> dict[str, Any]:
-        executable = self._server_executable()
-        model = self.settings.resolved_model_path
-        ready = bool(self.client and self.client.is_ready() and self.owned_process and self.owned_process.poll() is None)
-        result: dict[str, Any] = {
-            "backend": "llama.cpp",
-            "ready": ready,
-            "owned_process": self.owned_process is not None,
-            "model_configured": MODEL_ID,
-            "active_model": MODEL_ID if ready else None,
-            "resolved_model": MODEL_ID,
-            "version": self.settings.llama_release,
-            "runtime": {
-                "installed": executable is not None,
-                "verified": executable is not None,
-                "variant": self.settings.llama_runtime_variant,
-                "root_dir": str(self.settings.resolved_data_root),
-            },
-            "model": {
-                "installed": self._verified(model, MODEL_SIZE, MODEL_SHA256),
-                "verified": self._verified(model, MODEL_SIZE, MODEL_SHA256),
-                "path": str(model),
-                "size_bytes": MODEL_SIZE,
-            },
-            "models": [],
-            "running_models": [],
-        }
-        if result["model"]["installed"]:
-            result["models"] = [{"name": MODEL_ID, "model": MODEL_ID, "size": MODEL_SIZE, "details": {"family": "Hy-MT2", "quantization_level": "Q6_K", "format": "GGUF"}}]
-        if not ready and executable is None:
-            result["warning"] = "尚未安装 llama.cpp 运行时"
-        elif not ready and not result["model"]["verified"]:
-            result["warning"] = "尚未下载或校验 Hy-MT2-7B Q6_K 模型"
-        return result

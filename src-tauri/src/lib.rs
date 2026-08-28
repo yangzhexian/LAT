@@ -11,6 +11,16 @@ use tauri_plugin_shell::ShellExt;
 
 struct GatewayState(Mutex<Option<CommandChild>>);
 
+fn gateway_response_is_ready(response: &str) -> bool {
+    let status_ok = response
+        .lines()
+        .next()
+        .is_some_and(|line| line.starts_with("HTTP/1.0 200") || line.starts_with("HTTP/1.1 200"));
+    status_ok
+        && (response.contains("lat-local-translator")
+            || response.contains("hy-mt2-local-translator"))
+}
+
 fn gateway_is_ready() -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(
         &"127.0.0.1:8787".parse().expect("valid gateway address"),
@@ -23,9 +33,7 @@ fn gateway_is_ready() -> bool {
         .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:8787\r\nConnection: close\r\n\r\n");
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
-    response.contains("200")
-        && (response.contains("lat-local-translator")
-            || response.contains("hy-mt2-local-translator"))
+    gateway_response_is_ready(&response)
 }
 
 fn request_gateway_shutdown() {
@@ -64,8 +72,18 @@ fn start_gateway(
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
-            if let CommandEvent::Error(error) = event {
-                let _ = handle.emit("gateway-error", error);
+            match event {
+                CommandEvent::Error(error) => {
+                    let _ = handle.emit("gateway-error", error);
+                }
+                CommandEvent::Terminated(payload) => {
+                    if let Ok(mut guard) = handle.state::<GatewayState>().0.lock() {
+                        *guard = None;
+                    }
+                    let _ = handle.emit("gateway-terminated", payload.code);
+                    break;
+                }
+                _ => {}
             }
         }
     });
@@ -108,4 +126,23 @@ pub fn run() {
             stop_gateway_process(app);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gateway_response_is_ready;
+
+    #[test]
+    fn accepts_expected_gateway_health_response() {
+        let response =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"service\":\"lat-local-translator\"}";
+        assert!(gateway_response_is_ready(response));
+    }
+
+    #[test]
+    fn rejects_error_response_even_when_body_contains_200() {
+        let response =
+            "HTTP/1.1 503 Service Unavailable\r\n\r\n{\"service\":\"lat-local-translator\",\"retry\":200}";
+        assert!(!gateway_response_is_ready(response));
+    }
 }

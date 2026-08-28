@@ -1,21 +1,13 @@
-import hashlib
-import tempfile
-import urllib.error
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from local_translator.config import Settings
-from local_translator.llama_client import DownloadAsset, LlamaCppProcessManager, LlamaError
+from local_translator.llama_client import LlamaServerClient
 
 
-class FakeResponse:
-    status = 200
-
-    def __init__(self, payload: bytes):
-        self.payload = payload
-        self.headers = {"Content-Length": str(len(payload))}
-        self.reads = 0
+class StreamingResponse:
+    def __init__(self, lines: list[bytes]):
+        self.lines = lines
 
     def __enter__(self):
         return self
@@ -23,66 +15,29 @@ class FakeResponse:
     def __exit__(self, *_args):
         return False
 
-    def read(self, _size: int) -> bytes:
-        if self.reads:
-            return b""
-        self.reads += 1
-        return self.payload
+    def __iter__(self):
+        return iter(self.lines)
 
 
-class LlamaDownloadTests(unittest.TestCase):
-    def test_runtime_progress_uses_response_content_length(self):
-        payload = b"runtime archive"
-        asset = DownloadAsset("runtime", "https://example.invalid/runtime.zip", hashlib.sha256(payload).hexdigest())
-        with tempfile.TemporaryDirectory() as directory:
-            manager = LlamaCppProcessManager(Settings(runtime_root=directory))
-            destination = Path(directory) / "runtime.zip"
-            with patch("local_translator.llama_client.urllib.request.urlopen", return_value=FakeResponse(payload)):
-                events = list(manager._download_asset(asset, destination, "runtime"))
+class LlamaServerClientTests(unittest.TestCase):
+    def test_stream_emits_one_complete_event_with_usage(self):
+        response = StreamingResponse(
+            [
+                b'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n',
+                b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+                b'data: {"choices":[],"usage":{"completion_tokens":3}}\n',
+                b"data: [DONE]\n",
+            ]
+        )
+        client = LlamaServerClient("http://127.0.0.1:1234", Settings())
+        with patch("local_translator.llama_client.urllib.request.urlopen", return_value=response):
+            events = list(client.chat_stream("model", [], {}))
 
-        downloading = next(event for event in events if event["status"] == "downloading")
-        self.assertEqual(downloading["total_bytes"], len(payload))
-        self.assertEqual(downloading["percent"], 100.0)
-        self.assertIn("speed_mib_per_second", downloading)
+        complete = [event for event in events if event.get("done")]
+        self.assertEqual(len(complete), 1)
+        self.assertEqual(complete[0]["done_reason"], "stop")
+        self.assertEqual(complete[0]["eval_count"], 3)
 
-    def test_retries_after_connection_refused_and_resumes(self):
-        payload = b"runtime archive after reconnect"
-        asset = DownloadAsset("runtime", "https://example.invalid/runtime.zip", hashlib.sha256(payload).hexdigest())
-        with tempfile.TemporaryDirectory() as directory:
-            manager = LlamaCppProcessManager(Settings(runtime_root=directory))
-            destination = Path(directory) / "runtime.zip"
-            responses = [urllib.error.URLError("connection refused"), FakeResponse(payload)]
-            with patch("local_translator.llama_client.urllib.request.urlopen", side_effect=responses), patch("local_translator.llama_client.time.sleep"):
-                events = list(manager._download_asset(asset, destination, "runtime"))
 
-            self.assertTrue(destination.exists())
-            self.assertIn("retrying", [event["status"] for event in events])
-            self.assertEqual(events[-1]["status"], "verified")
-
-    def test_model_source_fallback(self):
-        with tempfile.TemporaryDirectory() as directory:
-            manager = LlamaCppProcessManager(Settings(runtime_root=directory))
-            destination = Path(directory) / "HY-MT2-7B-Q6_K.gguf"
-            fallback_events = iter([
-                {"type": "download", "phase": "model", "status": "verified", "percent": 100.0},
-            ])
-            with patch.object(manager, "_download_asset", side_effect=[LlamaError("Hugging Face unavailable"), fallback_events]):
-                events = list(manager._download_model(destination, 1, 1))
-
-        self.assertEqual(events[0]["status"], "switching_source")
-        self.assertEqual(events[1]["status"], "verified")
-
-    def test_install_stream_emits_complete_only_after_model_verification(self):
-        with tempfile.TemporaryDirectory() as directory:
-            manager = LlamaCppProcessManager(Settings(runtime_root=directory))
-            manager._server_executable = lambda: Path(directory) / "llama-server.exe"
-            manager._download_model = lambda *_args: iter([
-                {"type": "download", "phase": "model", "status": "verified", "percent": 100.0},
-            ])
-            manager._verified = lambda *_args: True
-            events = list(manager.install_stream())
-
-        self.assertEqual(events[-1]["status"], "complete")
-        self.assertEqual(events[-1]["file_count"], 3)
 if __name__ == "__main__":
     unittest.main()
