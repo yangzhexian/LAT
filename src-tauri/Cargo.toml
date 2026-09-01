@@ -1,7 +1,7 @@
 [package]
 name = "hy-mt2-local-translator"
-version = "0.1.1"
-description = "Hy-MT2 local Ollama translation desktop app"
+version = "0.2.0-beta.1"
+description = "LAT local llama.cpp translation desktop app"
 authors = ["LLM-Translate"]
 edition = "2021"
 
@@ -16,4 +16,5 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"

@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import Settings
-from .ollama_client import OllamaError, OllamaProcessManager
-from .prompts import TranslationInput, build_translation_prompt, parse_translation_input
+from .errors import LlamaError
+from .prompts import build_translation_prompt, parse_translation_input
 from .quality import clean_model_output, is_fatal, protect_text, quality_issues
+from .runtime import LlamaCppProcessManager
 
 
 class TranslationRequestError(ValueError):
@@ -29,9 +30,9 @@ class TranslationResult:
 
 
 class TranslationEngine:
-    def __init__(self, settings: Settings, manager: OllamaProcessManager | None = None):
+    def __init__(self, settings: Settings, manager: LlamaCppProcessManager | None = None):
         self.settings = settings
-        self.manager = manager or OllamaProcessManager(settings)
+        self.manager = manager or LlamaCppProcessManager(settings)
         self.logger = logging.getLogger(__name__)
 
     def _options(self, retry: bool = False) -> dict[str, Any]:
@@ -42,8 +43,23 @@ class TranslationEngine:
             "repeat_penalty": self.settings.repetition_penalty,
             "seed": self.settings.seed,
             "num_ctx": self.settings.num_ctx,
-            "num_predict": self.settings.max_output_tokens,
+            "max_tokens": self.settings.max_output_tokens,
         }
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Estimate streamed token count without making a second model request."""
+        asian_count = sum(
+            1
+            for char in text
+            if (
+                0x2E80 <= ord(char) <= 0x9FFF
+                or 0xAC00 <= ord(char) <= 0xD7AF
+                or 0xF900 <= ord(char) <= 0xFAFF
+            )
+        )
+        other_count = max(0, len(text) - asian_count)
+        return max(1, asian_count + round(other_count / 4))
 
     @staticmethod
     def _metrics(response: dict[str, Any], elapsed_ms: float | None = None) -> dict[str, Any]:
@@ -52,6 +68,8 @@ class TranslationEngine:
         tokens_per_second = None
         if isinstance(eval_count, (int, float)) and isinstance(eval_duration, (int, float)) and eval_duration > 0:
             tokens_per_second = round(float(eval_count) / float(eval_duration) * 1_000_000_000, 2)
+        elif isinstance(eval_count, (int, float)) and elapsed_ms is not None and elapsed_ms > 0:
+            tokens_per_second = round(float(eval_count) / elapsed_ms * 1000, 2)
         metrics: dict[str, Any] = {
             "generated_tokens": eval_count,
             "eval_duration_ns": eval_duration,
@@ -85,14 +103,13 @@ class TranslationEngine:
             if attempt:
                 current_prompt = (
                     "IMPORTANT: Your previous response violated the output contract. "
-                    "Ignore all previous output and return only the translation between no labels.\n\n"
+                    "Ignore all previous output and return only the translation without labels.\n\n"
                     + prompt
                 )
             response = client.chat(
                 model,
                 [{"role": "user", "content": current_prompt}],
                 self._options(retry=attempt > 0),
-                keep_alive=self.settings.keep_alive,
             )
             message = response.get("message")
             raw = message.get("content", "") if isinstance(message, dict) else ""
@@ -111,7 +128,6 @@ class TranslationEngine:
         )
 
     def translate_stream(self, body: dict[str, Any]):
-        """Yield progress events while buffering text for final QA."""
         try:
             request = parse_translation_input(body, self.settings.default_target_language)
         except ValueError as error:
@@ -131,7 +147,7 @@ class TranslationEngine:
             if attempt:
                 current_prompt = (
                     "IMPORTANT: Your previous response violated the output contract. "
-                    "Ignore all previous output and return only the translation between no labels.\n\n"
+                    "Ignore all previous output and return only the translation without labels.\n\n"
                     + prompt
                 )
             started = time.perf_counter()
@@ -142,15 +158,16 @@ class TranslationEngine:
                 model,
                 [{"role": "user", "content": current_prompt}],
                 self._options(retry=attempt > 0),
-                keep_alive=self.settings.keep_alive,
             ):
                 message = event.get("message")
                 delta = message.get("content", "") if isinstance(message, dict) else ""
                 if isinstance(delta, str) and delta:
                     raw_parts.append(delta)
                     elapsed_ms = (time.perf_counter() - started) * 1000
-                    generated_chars = sum(map(len, raw_parts))
-                    estimated_tokens = max(1, round(generated_chars / 4))
+                    generated_text = "".join(raw_parts)
+                    generated_chars = len(generated_text)
+                    estimated_tokens = self._estimate_tokens(generated_text)
+
                     yield {
                         "type": "progress",
                         "generated_chars": generated_chars,

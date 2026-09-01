@@ -1,4 +1,5 @@
-"""Local Ollama translation gateway for Hy-MT2."""
+"""LAT local translation gateway powered by a managed llama.cpp runtime."""
 
-__version__ = "0.1.0"
+from .version import __version__
 
+__all__ = ["__version__"]
