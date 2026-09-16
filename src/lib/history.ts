@@ -35,7 +35,7 @@ export async function readHistory(): Promise<TranslationHistory[]> {
   } finally { db.close(); }
 }
 
-export async function updateHistory(action: { add: TranslationHistory } | { remove: string } | { clear: true }): Promise<void> {
+export async function updateHistory(action: { add: TranslationHistory } | { remove: string } | { clear: true } | { trim: true }, limit = HISTORY_LIMIT): Promise<void> {
   const db = await openHistory();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -44,11 +44,11 @@ export async function updateHistory(action: { add: TranslationHistory } | { remo
       if ("clear" in action) store.clear();
       else if ("remove" in action) store.delete(action.remove);
       else {
-        store.put(action.add);
+        if ("add" in action) store.put(action.add);
         const request = store.getAll();
         request.onsuccess = () => {
           const rows = (request.result as TranslationHistory[]).sort((a, b) => b.createdAt - a.createdAt);
-          for (const row of rows.slice(HISTORY_LIMIT)) store.delete(row.id);
+          for (const row of rows.slice(Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : HISTORY_LIMIT)) store.delete(row.id);
         };
       }
       tx.oncomplete = () => resolve();

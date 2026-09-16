@@ -43,6 +43,12 @@ class ServerTests(unittest.TestCase):
             body = json.loads(response.read().decode())
         self.assertEqual(body["choices"][0]["message"]["content"], "Hello")
 
+    def test_telemetry_endpoint(self):
+        sample = {"timestamp": 1, "gpus": [{"id": "gpu", "power_w": None}], "message": ""}
+        self.httpd.app.telemetry.sample = Mock(return_value=sample)
+        with urllib.request.urlopen(self.url + "/admin/telemetry") as response:
+            self.assertEqual(json.loads(response.read()), sample)
+
     def test_translation_cancel_endpoint(self):
         engine = self.httpd.app.engine
         engine.cancel_translation = Mock()

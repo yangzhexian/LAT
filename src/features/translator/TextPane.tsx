@@ -1,3 +1,4 @@
+import { Button } from "../../components/Controls";
 import { LatexPreview } from "../../components/LatexPreview";
 import { LanguageSelect } from "./LanguageSelect";
 
@@ -36,20 +37,20 @@ export function TextPane({
           <LanguageSelect value={language} onChange={onLanguageChange} disabled={languageDisabled} />
         </div>
         <div className="pane-actions">
-          <button
+          <Button
             type="button"
             className={"mini-button " + (!preview ? "active" : "")}
             onClick={() => onPreviewChange(false)}
           >
             文本
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             className={"mini-button " + (preview ? "active" : "")}
             onClick={() => onPreviewChange(true)}
           >
             LaTeX 预览
-          </button>
+          </Button>
         </div>
       </header>
       {preview ? (

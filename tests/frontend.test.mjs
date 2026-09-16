@@ -50,3 +50,14 @@ test('SSE completion, error and truncated transport are distinguished', async ()
     await assert.rejects(api.translateStream({}, () => {}, controller.signal), { name: 'AbortError' });
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('history capacity can grow and trims oldest records atomically', async () => {
+  await history.updateHistory({ clear: true });
+  for (let i = 0; i < 60; i++) await history.updateHistory({ add: { id: String(i), createdAt: i } }, 50);
+  let rows = await history.readHistory();
+  assert.equal(rows.length, 50);
+  await history.updateHistory({ trim: true }, 10);
+  rows = await history.readHistory();
+  assert.deepEqual(rows.map((row) => row.id), Array.from({ length: 10 }, (_, i) => String(59 - i)));
+  await history.updateHistory({ clear: true });
+});

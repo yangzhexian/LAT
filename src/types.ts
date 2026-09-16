@@ -6,6 +6,10 @@ export interface UserSettings {
   theme: ThemeMode;
   layout: LayoutMode;
   reduceMotion: boolean;
+  historyLimit: number;
+  saveHistory: boolean;
+  telemetryInterval: number;
+  telemetryWindow: number;
   autoFont: boolean;
   removeLineBreaks: boolean;
   dataDirectory: string;
@@ -160,4 +164,20 @@ export interface StreamEvent {
   quality_issues?: string[];
   metrics?: TranslationMetrics;
   message?: string;
+}
+
+export interface GpuSample {
+  id: string;
+  name: string;
+  memory_used_mib: number | null;
+  memory_total_mib: number | null;
+  utilization_pct: number | null;
+  power_w: number | null;
+  power_limit_w: number | null;
+  temperature_c: number | null;
+}
+export interface TelemetrySample {
+  timestamp: number;
+  gpus: GpuSample[];
+  message: string;
 }

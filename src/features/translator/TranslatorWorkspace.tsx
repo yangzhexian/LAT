@@ -1,3 +1,5 @@
+import { ModelDashboard } from "../model-monitor/ModelDashboard";
+import { Button, DangerButton } from "../../components/Controls";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cancelTranslation, translateStream } from "../../lib/api";
 import { languageName } from "../../lib/languages";
@@ -59,6 +61,8 @@ export function TranslatorWorkspace({
   useEffect(() => { setPage(status.ready ? "translate" : "model"); }, [status.ready]);
   const [history, setHistory] = useState<TranslationHistory[]>([]);
   const [historyError, setHistoryError] = useState("");
+  const historyPreferences = useRef(settings);
+  historyPreferences.current = settings;
   const controller = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   const checkpoint = useRef<{ id: string; identity: string } | null>(null);
@@ -84,6 +88,9 @@ export function TranslatorWorkspace({
     catch { setHistoryError("无法读取本地历史记录"); }
   }
   useEffect(() => { if (page === "history") void refreshHistory(); }, [page]);
+  useEffect(() => {
+    void updateHistory({ trim: true }, settings.historyLimit ?? 30).then(refreshHistory).catch(() => setHistoryError("历史上限应用失败"));
+  }, [settings.historyLimit]);
   async function removeHistory(id?: string) {
     try { await updateHistory(id ? { remove: id } : { clear: true }); await refreshHistory(); }
     catch { setHistoryError("历史记录更新失败"); }
@@ -161,14 +168,14 @@ export function TranslatorWorkspace({
         controller.current.signal,
       );
       const completed = finalEvent as StreamEvent | null;
-      if (completed) {
+      if (completed && (historyPreferences.current.saveHistory ?? true)) {
         try {
           await updateHistory({ add: {
             id: completed.job_id || crypto.randomUUID(), createdAt: Date.now(), source, submittedText: normalized,
             translation: completed.translation || "", sourceLanguage, targetLanguage,
             model: completed.model || status.active_model || status.model_configured,
             metrics: completed.metrics,
-          } });
+          } }, historyPreferences.current.historyLimit ?? 30);
           await refreshHistory();
         } catch { setMessage("翻译完成，但历史记录未能保存到本机"); }
       }
@@ -191,7 +198,7 @@ export function TranslatorWorkspace({
       <nav className="side-nav" aria-label="主导航">
         <span className="nav-brand">LAT</span>
         {([['translate', 'translate', '翻译'], ['history', 'history', '历史记录'], ['model', 'model', '模型'], ['settings', 'settings', '设置']] as const).map(([id, icon, label]) => (
-          <button key={id} className={page === id ? "nav-item active" : "nav-item"} aria-label={label} title={label} aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}><Icon name={icon as IconName} /><span className="nav-tooltip">{label}</span></button>
+          <Button key={id} className={page === id ? "nav-item active" : "nav-item"} aria-label={label} title={label} aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}><Icon name={icon as IconName} /><span className="nav-tooltip">{label}</span></Button>
         ))}
       </nav>
       <header className="app-header">
@@ -202,12 +209,13 @@ export function TranslatorWorkspace({
           <span className={"status-dot " + (status.ready ? "ready" : "")} />
           <span>{status.active_model || status.resolved_model || status.model_configured}<small>{status.ready ? "本地运行 · 已就绪" : "模型未启用"}</small></span>
         </div>
-        <button type="button" className="secondary-button danger-button" disabled={busy || modelBusy || !status.ready} onClick={onDisable}>
-          {modelBusy ? "正在关闭…" : "关闭模型"}
-        </button>
+        <div className="header-action">{page === "history" ?
+          <DangerButton disabled={!history.length} onClick={() => { if (window.confirm("清空全部翻译历史？此操作无法撤销。")) void removeHistory(); }}>清空历史</DangerButton> :
+          <DangerButton disabled={busy || modelBusy || !status.ready} onClick={onDisable}>{modelBusy ? "正在关闭…" : "关闭模型"}</DangerButton>}
+        </div>
       </header>
       {modelError && <div className="model-error" role="alert">{modelError}</div>}
-      {page === "model" && <section className="model-page">{setupContent || <p className="empty-hint">模型已启用。关闭当前模型后，可选择其他模型。</p>}</section>}
+      {page === "model" && <section className="model-page">{status.ready ? <ModelDashboard interval={settings.telemetryInterval} windowSeconds={settings.telemetryWindow} /> : setupContent}</section>}
       <div className="translation-page" hidden={page !== "translate"}>
       <div className="workspace-status" role="status">
         {busy || canResume ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段 · ${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}% · ${message}` : message}
@@ -228,7 +236,7 @@ export function TranslatorWorkspace({
           onSubmit={() => void translate()}
         />
         <div className="swap-column">
-          <button
+          <Button
             type="button"
             className="swap-button"
             disabled={!canSwap || busy}
@@ -237,7 +245,7 @@ export function TranslatorWorkspace({
             aria-label="交换语言和内容"
           >
             <Icon name="swap" />
-          </button>
+          </Button>
         </div>
         <TextPane
           title="译文"
@@ -256,9 +264,9 @@ export function TranslatorWorkspace({
           <span>{sourceChars.toLocaleString()} / {inputLimit.toLocaleString()} 字符{sourceChars > inputLimit ? " · 超过输入上限" : ""}</span><br />
           {busy ? "约 " + speed + " tokens/s · " + elapsed : completedMetrics(metrics)}
         </div>
-        {busy && <button className="secondary-button" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? "正在取消…" : "取消翻译"}</button>}
-        {canResume && !busy && <button className="secondary-button" onClick={() => void translate(true)}>重新翻译</button>}
-        <button
+        {busy && <Button className="secondary-button" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? "正在取消…" : "取消翻译"}</Button>}
+        {canResume && !busy && <Button className="secondary-button" onClick={() => void translate(true)}>重新翻译</Button>}
+        <Button
           type="button"
           className="primary-button translate-button"
           disabled={busy || modelBusy || !status.ready || !source.trim() || sourceChars > inputLimit}
@@ -266,20 +274,19 @@ export function TranslatorWorkspace({
         >
           {busy ? "翻译中…" : canResume ? "继续翻译" : "开始翻译"}
           <span>Ctrl ↵</span>
-        </button>
+        </Button>
       </footer>
       </div>
       {page === "settings" && <SettingsPanel settings={settings} onChange={onSettingsChange} onClose={() => setPage("translate")} />}
       {page === "history" && <section className="history-page">
-        <header className="settings-header"><div><p className="settings-kicker">LOCAL HISTORY</p><h2>翻译历史</h2><p>仅保存在本机 · 最近 30 条</p></div>
-          <button className="secondary-button" disabled={!history.length} onClick={() => { if (window.confirm("清空全部翻译历史？此操作无法撤销。")) void removeHistory(); }}>清空历史</button></header>
+        <p className="history-description">仅保存在本机 · 最近 {settings.historyLimit ?? 30} 条{settings.saveHistory === false ? " · 已暂停保存新记录" : ""}</p>
         {historyError && <p role="alert">{historyError}</p>}
         {!history.length && <p className="empty-hint">完成翻译后，记录会出现在这里。</p>}
         <div className="history-grid">{history.map((row) => <article className="history-card" key={row.id}>
           <div className="history-meta">{new Date(row.createdAt).toLocaleString()} · {row.sourceLanguage} → {row.targetLanguage} · {row.model}</div>
           <p>{row.source.slice(0, 180)}{row.source.length > 180 ? "…" : ""}</p>
-          <details><summary>查看完整记录</summary><div className="history-text">{row.source}</div><hr /><div className="history-text">{row.translation}</div></details>
-          <div className="history-actions"><button className="secondary-button" disabled={busy} onClick={() => restoreHistory(row)}>恢复到工作区</button><button className="mini-button" onClick={() => void removeHistory(row.id)}>删除</button></div>
+          <details><summary>查看完整记录</summary><div className="history-comparison"><section><h3>原文 · {languageName(row.sourceLanguage)}</h3><div className="history-text">{row.source}</div></section><section><h3>译文 · {languageName(row.targetLanguage)}</h3><div className="history-text">{row.translation}</div></section></div></details>
+          <div className="history-actions"><Button className="secondary-button" disabled={busy} onClick={() => restoreHistory(row)}>恢复到工作区</Button><Button className="mini-button" onClick={() => void removeHistory(row.id)}>删除</Button></div>
         </article>)}</div>
       </section>}
     </main>

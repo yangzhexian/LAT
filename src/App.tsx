@@ -1,3 +1,4 @@
+import { Button } from "./components/Controls";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MathJaxContext } from "better-react-mathjax";
 import { ModelSelector } from "./features/model-setup/ModelSelector";
@@ -21,6 +22,7 @@ import type {
   LocalStatus,
 } from "./types";
 import "./styles.css";
+import "./components/controls.css";
 
 const DEFAULT_DOWNLOAD_MODEL = "hy-mt2-7b:q6_k";
 const EMPTY_DOWNLOAD_STATE: DownloadState = {
@@ -342,9 +344,9 @@ export default function App() {
         <div className="error-icon">!</div>
         <h1>无法启动 LAT</h1>
         <p>{error}</p>
-        <button type="button" className="primary-button" onClick={() => window.location.reload()}>
+        <Button type="button" className="primary-button" onClick={() => window.location.reload()}>
           重新连接
-        </button>
+        </Button>
       </section>
     );
   } else if (screen === "select") {

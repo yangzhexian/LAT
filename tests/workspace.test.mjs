@@ -58,6 +58,9 @@ test('workspace retains text across navigation, disables conflicts while transla
     assert.equal(document.querySelector('.danger-button').disabled, false);
     await click('[aria-label="历史记录"]');
     assert.equal(document.querySelectorAll('.history-card').length, 1);
+    assert.equal(document.querySelector('.header-action .danger-button').textContent, '清空历史');
+    assert.equal([...document.querySelectorAll('h2')].filter((item) => item.textContent === '翻译历史').length, 0);
+    assert.equal(document.querySelectorAll('.history-comparison > section').length, 2);
     await click('[aria-label="翻译"]');
     await click('.translate-button');
     await emit({ type: 'plan', job_id: 'resume-test', translation: '', completed_chunks: 0, total_chunks: 2 });

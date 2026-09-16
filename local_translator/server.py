@@ -16,6 +16,7 @@ from .environment import inspect_download_environment
 from .engine import TranslationEngine, TranslationOutputError, TranslationRequestError
 from .errors import DownloadCancelled, LlamaError
 from .version import __version__
+from .telemetry import GpuTelemetry
 
 
 LOGGER = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class App:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.engine = TranslationEngine(settings)
+        self.telemetry = GpuTelemetry()
         self.httpd: ThreadingHTTPServer | None = None
 
     def stop(self) -> None:
@@ -106,6 +108,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             if self.path in {"/health", "/v1/health"}:
                 self._json(200, {"status": "ok", "service": "lat-local-translator"})
+                return
+            if self.path == "/admin/telemetry":
+                self._json(200, self.app.telemetry.sample())
                 return
             if self.path == "/admin/status":
                 self._json(200, {**self.app.engine.manager.status(), "max_input_chars": self.app.settings.max_input_chars})

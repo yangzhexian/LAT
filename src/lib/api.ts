@@ -227,3 +227,7 @@ export async function translateStream(
   if (streamError) throw new Error(streamError);
   if (!completed) throw new Error("翻译流提前结束，未收到完成确认");
 }
+
+export function getTelemetry(signal?: AbortSignal): Promise<import("../types").TelemetrySample> {
+  return request("/admin/telemetry", { signal });
+}

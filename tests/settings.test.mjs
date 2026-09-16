@@ -27,10 +27,17 @@ test('settings capsules update preferences and reduced motion survives remount',
     assert.equal(document.documentElement.dataset.theme, 'dark');
     await React.act(async () => [...document.querySelectorAll('button')].find((button) => button.textContent === '上下').click());
     assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).layout, 'vertical');
+    await React.act(async () => document.querySelector('[aria-label="保存翻译历史"]').click());
+    assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).saveHistory, false);
+    await React.act(async () => {
+      const select = [...document.querySelectorAll('select')].find((item) => item.closest('label').textContent.includes('最多保存'));
+      select.value = '100'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    });
+    assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).historyLimit, 100);
     await React.act(async () => root.unmount());
     root = createRoot(document.getElementById('root'));
     await React.act(async () => root.render(React.createElement(Harness)));
-    assert.equal([...document.querySelectorAll('[role="switch"]')].at(-1).checked, true);
+    assert.equal(document.querySelector('[aria-label="减少动态效果"]').checked, true);
     assert.equal(document.querySelectorAll('[aria-pressed="true"]').length, 2);
   } finally { await React.act(async () => root.unmount()); dom.window.close(); }
 });
