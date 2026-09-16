@@ -117,6 +117,8 @@ class TranslationEngine:
                 raw = ""
             cleaned = clean_model_output(raw, protected)
             issues = quality_issues(raw, cleaned, protected, request.source_text)
+            if response.get("done_reason") == "length":
+                issues.append("output_truncated")
             last_raw = raw
             last_issues = issues
             if not is_fatal(issues):
@@ -124,7 +126,7 @@ class TranslationEngine:
             self.logger.warning("Hy-MT2 output rejected on attempt %s: %s", attempt + 1, issues)
 
         raise TranslationOutputError(
-            f"模型输出未通过结果校验: {last_issues}; raw={last_raw[:500]!r}"
+            f"模型输出未通过结果校验: {last_issues}"
         )
 
     def translate_stream(self, body: dict[str, Any]):
@@ -181,6 +183,10 @@ class TranslationEngine:
             raw = "".join(raw_parts)
             cleaned = clean_model_output(raw, protected)
             issues = quality_issues(raw, cleaned, protected, request.source_text)
+            if final_response.get("done_reason") == "length":
+                issues.append("output_truncated")
+            if not final_response:
+                issues.append("incomplete_stream")
             elapsed_ms = (time.perf_counter() - started) * 1000
             metrics = self._metrics(final_response, elapsed_ms)
             if not is_fatal(issues):
@@ -195,4 +201,4 @@ class TranslationEngine:
             self.logger.warning("Hy-MT2 streamed output rejected on attempt %s: %s", attempt + 1, issues)
             yield {"type": "retry", "issues": issues}
 
-        raise TranslationOutputError("流式模型输出未通过结果校验")
+        raise TranslationOutputError(f"流式模型输出未通过结果校验: {issues}")

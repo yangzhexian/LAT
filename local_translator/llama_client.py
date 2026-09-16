@@ -159,6 +159,8 @@ class LlamaServerClient:
                     if isinstance(choice.get("finish_reason"), str):
                         done_reason = choice["finish_reason"]
                 if not done_emitted:
+                    if done_reason is None:
+                        raise LlamaError("incomplete_stream: 模型连接提前结束，未收到完成确认")
                     yield {
                         "done": True,
                         "done_reason": done_reason,

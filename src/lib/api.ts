@@ -208,5 +208,13 @@ export async function translateStream(
   if (!response.ok) {
     throw await responseError(response, "流式翻译请求失败");
   }
-  await readEventStream<StreamEvent>(response, onEvent);
+  let completed = false;
+  let streamError = "";
+  await readEventStream<StreamEvent>(response, (event) => {
+    if (event.type === "complete") completed = true;
+    if (event.type === "error") streamError = event.message || "翻译失败";
+    onEvent(event);
+  });
+  if (streamError) throw new Error(streamError);
+  if (!completed) throw new Error("翻译流提前结束，未收到完成确认");
 }

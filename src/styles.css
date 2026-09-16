@@ -121,7 +121,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .text-editor, .latex-preview { flex: 1; width: 100%; min-height: 0; padding: 18px; border: 0; outline: 0; background: transparent; color: var(--text); line-height: 1.72; resize: none; white-space: pre-wrap; overflow: auto; }
 .text-editor::placeholder { color: var(--subtle); }
 .latex-preview { font-family: "Times New Roman", Times, serif; font-size: 17px; overflow: auto; }
-.latex-preview mjx-container, .latex-preview mjx-container mjx-math, .latex-preview mjx-container mjx-mtext { max-width: 100%; color: var(--text) !important; font-family: "Times New Roman", Times, serif !important; }
+.latex-preview mjx-container { max-width: 100%; color: var(--text); }
 .latex-preview mjx-container { overflow-x: auto; overflow-y: hidden; }
 .empty-hint { color: var(--subtle); }
 .swap-column { display: grid; place-items: center; }
