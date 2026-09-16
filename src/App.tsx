@@ -58,6 +58,8 @@ export default function App() {
   const [downloadModel, setDownloadModel] = useState(DEFAULT_DOWNLOAD_MODEL);
   const [settings, setSettings] = usePersistentSettings();
   const [busy, setBusy] = useState(false);
+  const [modelTransition, setModelTransition] = useState<"loading" | "unloading" | null>(null);
+  const modelOperation = useRef(false);
   const [download, setDownload] = useState<DownloadState>(EMPTY_DOWNLOAD_STATE);
   const cancelRequestedRef = useRef(false);
   const [customDirectoryOpen, setCustomDirectoryOpen] = useState(false);
@@ -173,30 +175,43 @@ export default function App() {
   }
 
   async function enableSelectedModel() {
+    if (modelOperation.current || busy) return;
+    modelOperation.current = true;
+    setModelTransition("loading");
     setBusy(true);
     setError("");
     try {
       await loadModel(selectedModel);
       const next = await refresh();
+      if (!next.ready) throw new Error("模型尚未就绪，请查看本地日志后重试");
       setStatus(next);
       setScreen("translator");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      modelOperation.current = false;
+      setModelTransition(null);
       setBusy(false);
     }
   }
 
   async function disableModel() {
+    if (modelOperation.current || busy) return;
+    modelOperation.current = true;
+    setModelTransition("unloading");
+    setError("");
     setBusy(true);
     try {
       await unloadModel(status?.active_model || selectedModel);
       const next = await refresh();
+      if (next.ready) throw new Error("模型仍在运行，关闭未完成");
       setStatus(next);
       setScreen("select");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      modelOperation.current = false;
+      setModelTransition(null);
       setBusy(false);
     }
   }
@@ -285,6 +300,7 @@ export default function App() {
         }));
         return;
       }
+      setModelTransition("loading");
       await loadModel(downloadModel);
       const next = await refresh();
       if (!next.ready) {
@@ -305,6 +321,7 @@ export default function App() {
       }));
     } finally {
       cancelRequestedRef.current = false;
+      setModelTransition(null);
       setBusy(false);
       setDownload((current) => ({ ...current, busy: false, cancelRequested: false }));
     }
@@ -367,11 +384,20 @@ export default function App() {
   return (
     <MathJaxContext version={3} config={mathJaxConfig} src="/mathjax/tex-chtml.js">
       {(screen === "loading" || screen === "error") && content}
-      {status && <div hidden={screen === "loading" || screen === "error"}>
+      {status && <div inert={modelTransition !== null} hidden={screen === "loading" || screen === "error"}>
         <TranslatorWorkspace status={status} settings={settings} modelBusy={busy}
-          setupContent={screen === "select" ? content : null}
+          setupContent={screen === "select" ? content : null} modelError={error}
           onSettingsChange={(next) => setSettings((current) => ({ ...current, ...next }))}
           onDisable={() => void disableModel()} />
+      </div>}
+      {modelTransition && <div className="model-transition" role="status" aria-live="polite">
+        <div className={"model-transition-card " + modelTransition}>
+          <div className="model-orbit"><span /><span /><span /></div>
+          <p className="settings-kicker">LOCAL INTELLIGENCE</p>
+          <h2>{modelTransition === "loading" ? "正在唤醒模型" : "正在关闭模型"}</h2>
+          <p>{modelTransition === "loading" ? "正在加载本地模型，准备翻译工作区…" : "正在结束模型进程并释放显存…"}</p>
+          <span className="model-transition-note">{selectedModel || status?.model_configured}</span>
+        </div>
       </div>}
     </MathJaxContext>
   );

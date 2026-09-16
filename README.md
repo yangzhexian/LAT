@@ -62,7 +62,7 @@ LAT 当前支持 Tencent 官方 GGUF 仓库中的 Hy-MT2-1.8B 和 Hy-MT2-7B 变�
 从源代码开发或构建桌面端：
 
 - Rust stable MSVC toolchain
-- Node.js 18 或更高版本
+- Node.js 22.13+ 或 24+（构建及前端测试）
 - Python 3.10 或更高版本
 - Windows SDK 与 Visual Studio C++ 构建工具
 
@@ -293,3 +293,5 @@ LAT 以 MIT 许可证发布，详见 [LICENSE](LICENSE)。
 历史保存在当前 WebView 的 `lat.history` 数据库中，不随模型目录迁移，也不进行云同步。开发浏览器和安装版使用各自的本地存储。
 
 前端逻辑回归测试：`npm run test:frontend`。
+
+本轮本地验收说明和人工检查项见 [毛玻璃与长文本验收清单](docs/acceptance/lat-ui-longtext-checklist.md)。

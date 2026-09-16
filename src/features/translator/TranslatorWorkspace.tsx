@@ -9,6 +9,7 @@ import type {
   UserSettings,
 } from "../../types";
 import { readHistory, updateHistory, type TranslationHistory } from "../../lib/history";
+import { Icon, type IconName } from "../../components/Icon";
 import { SettingsPanel } from "./SettingsPanel";
 import { TextPane } from "./TextPane";
 
@@ -19,6 +20,7 @@ interface TranslatorWorkspaceProps {
   onDisable: () => void;
   modelBusy?: boolean;
   setupContent?: ReactNode;
+  modelError?: string;
 }
 
 function autoFontSize(value: string, enabled: boolean): number {
@@ -44,6 +46,7 @@ export function TranslatorWorkspace({
   onDisable,
   modelBusy = false,
   setupContent,
+  modelError,
 }: TranslatorWorkspaceProps) {
   const [sourceLanguage, setSourceLanguage] = useState("zh");
   const [targetLanguage, setTargetLanguage] = useState("en");
@@ -162,22 +165,23 @@ export function TranslatorWorkspace({
     <main className="translator-screen">
       <nav className="side-nav" aria-label="主导航">
         <span className="nav-brand">LAT</span>
-        {([['translate', '⇄', '翻译'], ['history', '◷', '历史记录'], ['model', '⏻', '模型'], ['settings', '⚙', '设置']] as const).map(([id, icon, label]) => (
-          <button key={id} className={page === id ? "nav-item active" : "nav-item"} aria-label={label} title={label} aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}>{icon}</button>
+        {([['translate', 'translate', '翻译'], ['history', 'history', '历史记录'], ['model', 'model', '模型'], ['settings', 'settings', '设置']] as const).map(([id, icon, label]) => (
+          <button key={id} className={page === id ? "nav-item active" : "nav-item"} aria-label={label} title={label} aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}><Icon name={icon as IconName} /><span className="nav-tooltip">{label}</span></button>
         ))}
       </nav>
       <header className="app-header">
         <div className="brand">
-          <span>Local AI Translator</span>
+          <span>{{ translate: "翻译工作区", history: "翻译历史", model: "本地模型", settings: "偏好设置" }[page]}<small>Local AI Translator</small></span>
         </div>
         <div className="active-model">
           <span className={"status-dot " + (status.ready ? "ready" : "")} />
-          {status.active_model || status.resolved_model || status.model_configured}
+          <span>{status.active_model || status.resolved_model || status.model_configured}<small>{status.ready ? "本地运行 · 已就绪" : "模型未启用"}</small></span>
         </div>
         <button type="button" className="secondary-button danger-button" disabled={busy || modelBusy || !status.ready} onClick={onDisable}>
           {modelBusy ? "正在关闭…" : "关闭模型"}
         </button>
       </header>
+      {modelError && <div className="model-error" role="alert">{modelError}</div>}
       {page === "model" && <section className="model-page">{setupContent || <p className="empty-hint">模型已启用。关闭当前模型后，可选择其他模型。</p>}</section>}
       <div className="translation-page" hidden={page !== "translate"}>
       <div className="workspace-status" role="status">
@@ -187,6 +191,7 @@ export function TranslatorWorkspace({
       <div className={"workspace " + settings.layout}>
         <TextPane
           title="原文"
+          languageDisabled={busy}
           language={sourceLanguage}
           value={source}
           preview={sourcePreview}
@@ -204,12 +209,14 @@ export function TranslatorWorkspace({
             disabled={!canSwap || busy}
             onClick={swapLanguages}
             title="交换语言和内容"
+            aria-label="交换语言和内容"
           >
-            ⇄
+            <Icon name="swap" />
           </button>
         </div>
         <TextPane
           title="译文"
+          languageDisabled={busy}
           language={targetLanguage}
           value={translation}
           preview={targetPreview}

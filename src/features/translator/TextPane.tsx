@@ -8,6 +8,7 @@ interface TextPaneProps {
   preview: boolean;
   fontSize: number;
   readOnly?: boolean;
+  languageDisabled?: boolean;
   onLanguageChange: (value: string) => void;
   onChange?: (value: string) => void;
   onPreviewChange: (value: boolean) => void;
@@ -21,6 +22,7 @@ export function TextPane({
   preview,
   fontSize,
   readOnly,
+  languageDisabled,
   onLanguageChange,
   onChange,
   onPreviewChange,
@@ -31,7 +33,7 @@ export function TextPane({
       <header className="pane-header">
         <div>
           <span className="pane-title">{title}</span>
-          <LanguageSelect value={language} onChange={onLanguageChange} />
+          <LanguageSelect value={language} onChange={onLanguageChange} disabled={languageDisabled} />
         </div>
         <div className="pane-actions">
           <button
@@ -55,6 +57,7 @@ export function TextPane({
       ) : (
         <textarea
           className="text-editor"
+          aria-label={title}
           style={{ fontSize }}
           value={value}
           readOnly={readOnly}
