@@ -43,6 +43,16 @@ class ServerTests(unittest.TestCase):
             body = json.loads(response.read().decode())
         self.assertEqual(body["choices"][0]["message"]["content"], "Hello")
 
+    def test_translation_cancel_endpoint(self):
+        engine = self.httpd.app.engine
+        engine.cancel_translation = Mock()
+        request = urllib.request.Request(self.url + "/translate/cancel",
+            data=json.dumps({"job_id": "job-1"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(json.loads(response.read())["status"], "cancelling")
+        engine.cancel_translation.assert_called_once_with("job-1")
+
     def test_download_cancel_endpoint(self):
         request = urllib.request.Request(
             self.url + "/admin/download/cancel",

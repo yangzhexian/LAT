@@ -22,7 +22,12 @@ test('workspace retains text across navigation, disables conflicts while transla
   const props = { status: { ready: true, model_configured: 'test-model', backend: 'llama.cpp' }, settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, dataDirectory: '' }, onSettingsChange() {}, onDisable() { disabled++; } };
   const originalFetch = globalThis.fetch;
   let streamController;
-  globalThis.fetch = async (_url, init) => new Response(new ReadableStream({ start(controller) { streamController = controller; init.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true }); } }));
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    if (url.endsWith('/translate/cancel')) return Response.json({ status: 'cancelling' });
+    return new Response(new ReadableStream({ start(controller) { streamController = controller; init.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true }); } }));
+  };
   const click = async (selector) => React.act(async () => document.querySelector(selector).click());
   const emit = async (event) => React.act(async () => { streamController.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(event) + '\n\n')); await new Promise((resolve) => setTimeout(resolve, 10)); });
   try {
@@ -55,6 +60,7 @@ test('workspace retains text across navigation, disables conflicts while transla
     assert.equal(document.querySelectorAll('.history-card').length, 1);
     await click('[aria-label="翻译"]');
     await click('.translate-button');
+    await emit({ type: 'plan', job_id: 'resume-test', translation: '', completed_chunks: 0, total_chunks: 2 });
     await emit({ type: 'segment_complete', translation: '部分译文', completed_chars: 6, total_chars: 12, completed_chunks: 1, total_chunks: 2 });
     await React.act(async () => {
       Array.from(document.querySelectorAll('button')).find((button) => button.textContent === '取消翻译').click();
@@ -62,6 +68,18 @@ test('workspace retains text across navigation, disables conflicts while transla
     });
     assert.match(document.querySelector('[role="status"]').textContent, /已取消/);
     assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '部分译文');
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/);
+    assert.equal(requests.at(-1).url.endsWith('/translate/cancel'), true);
+    assert.equal(requests.at(-1).body.job_id, 'resume-test');
+    await click('.translate-button');
+    assert.equal(requests.at(-1).body.job_id, 'resume-test');
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '部分译文');
+    await emit({ type: 'plan', job_id: 'resume-test', translation: '部分译文', completed_chunks: 1, total_chunks: 2 });
+    await emit({ type: 'segment_complete', translation: '剩余译文', completed_chunks: 2, total_chunks: 2 });
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '部分译文剩余译文');
+    await emit({ type: 'error', message: '模拟连接失败' });
+    await React.act(async () => { streamController.close(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/);
     await click('[aria-label="历史记录"]');
     assert.equal(document.querySelectorAll('.history-card').length, 1);
     await click('.history-actions .secondary-button');

@@ -5,6 +5,7 @@ const SETTINGS_KEY = "lat.settings.v1";
 const DEFAULT_SETTINGS: UserSettings = {
   theme: "light",
   layout: "horizontal",
+  reduceMotion: false,
   autoFont: true,
   removeLineBreaks: false,
   dataDirectory: "",
@@ -29,6 +30,7 @@ export function usePersistentSettings(): [
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
+    document.documentElement.dataset.reduceMotion = String(settings.reduceMotion);
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }, [settings]);
 

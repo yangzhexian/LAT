@@ -129,6 +129,13 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if self.path == "/translate/cancel":
+                job_id = self._read_json().get("job_id")
+                if not isinstance(job_id, str) or not job_id:
+                    raise TranslationRequestError("job_id 不能为空")
+                self.app.engine.cancel_translation(job_id)
+                self._json(200, {"status": "cancelling", "job_id": job_id})
+                return
             if self.path == "/admin/directory":
                 body = self._read_json()
                 root_dir = body.get("root_dir")

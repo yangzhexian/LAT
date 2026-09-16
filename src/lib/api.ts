@@ -193,6 +193,13 @@ export function cancelDownload(): Promise<unknown> {
   return request("/admin/download/cancel", { method: "POST" });
 }
 
+export function cancelTranslation(jobId: string): Promise<unknown> {
+  return request("/translate/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId }),
+  });
+}
+
 export async function translateStream(
   body: TranslationRequest,
   onEvent: (event: StreamEvent) => void,
@@ -213,7 +220,7 @@ export async function translateStream(
   let completed = false;
   let streamError = "";
   await readEventStream<StreamEvent>(response, (event) => {
-    if (event.type === "complete") completed = true;
+    if (event.type === "complete" || event.type === "cancelled") completed = true;
     if (event.type === "error") streamError = event.message || "翻译失败";
     onEvent(event);
   });

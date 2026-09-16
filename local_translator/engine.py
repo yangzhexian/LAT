@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import uuid
 import logging
 import time
 import threading
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from .config import Settings
@@ -12,6 +15,8 @@ from .errors import LlamaError
 from .prompts import build_translation_prompt, parse_translation_input
 from .quality import clean_model_output, is_fatal, protect_text, quality_issues
 from .runtime import LlamaCppProcessManager
+from .jobs import TranslationCancelled, TranslationJob
+from .segments import split_source, token_cost
 
 
 class TranslationRequestError(ValueError):
@@ -37,6 +42,8 @@ class TranslationEngine:
         self.manager = manager or LlamaCppProcessManager(settings)
         self.logger = logging.getLogger(__name__)
         self._translation_lock = threading.Lock()
+        self._jobs: dict[str, TranslationJob] = {}
+        self._active_job: TranslationJob | None = None
 
     def _options(self, retry: bool = False) -> dict[str, Any]:
         return {
@@ -90,16 +97,30 @@ class TranslationEngine:
                 return TranslationResult(event["translation"], event["model"], event["quality_issues"], "", event["metrics"])
         raise TranslationOutputError("incomplete_stream: 翻译未完成")
 
+    def cancel_translation(self, job_id: str) -> None:
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise TranslationRequestError("checkpoint_expired: 翻译断点已过期，请重新翻译")
+        job.cancel.set()
+
     def translate_stream(self, body: dict[str, Any]):
-        if not self._translation_lock.acquire(blocking=False):
-            raise TranslationRequestError("translation_busy: 模型正在处理另一个翻译任务，请稍后重试")
+        resume_id = body.get("job_id")
+        waiting_since = time.monotonic()
+        while not self._translation_lock.acquire(blocking=False):
+            active = self._active_job
+            if not (resume_id and active and active.id == resume_id and active.cancel.is_set()):
+                raise TranslationRequestError("translation_busy: 模型正在处理另一个翻译任务，请稍后重试")
+            if time.monotonic() - waiting_since > 30:
+                raise TranslationRequestError("translation_busy: 上次取消仍在处理中，断点已保留，请稍后继续")
+            yield {"type": "waiting", "job_id": resume_id, "message": "等待上次推理停止，随后从断点继续…"}
+            time.sleep(0.1)
         try:
             yield from self._translate_document(body)
         finally:
+            self._active_job = None
             self._translation_lock.release()
 
-    def _translate_document(self, body: dict[str, Any]):
-        from .segments import split_source, token_cost
+    def _get_job(self, body: dict[str, Any]) -> TranslationJob:
         try:
             request = parse_translation_input(body, self.settings.default_target_language)
         except ValueError as error:
@@ -107,91 +128,134 @@ class TranslationEngine:
         source = request.source_text
         if len(source) > self.settings.max_input_chars:
             raise TranslationRequestError(f"待翻译文本过长（{len(source)} 字符），当前上限为 {self.settings.max_input_chars}")
+        fingerprint = hashlib.sha256(json.dumps({
+            "request": asdict(request), "model": self.settings.model_name,
+            "runtime_root": str(self.settings.resolved_data_root), "options": self._options(),
+        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        now = time.monotonic()
+        for key in list(self._jobs):
+            if now - self._jobs[key].updated_at > 3600:
+                del self._jobs[key]
+        resume_id = body.get("job_id")
+        if resume_id is not None:
+            if not isinstance(resume_id, str) or resume_id not in self._jobs:
+                raise TranslationRequestError("checkpoint_expired: 翻译断点已过期，请选择重新翻译")
+            job = self._jobs[resume_id]
+            if job.fingerprint != fingerprint:
+                raise TranslationRequestError("checkpoint_mismatch: 原文、语言、模型或推理配置已改变，请重新翻译")
+            job.cancel.clear()
+            job.updated_at = now
+            return job
         overhead = token_cost(build_translation_prompt(request, "")) + 256
         budget = min(1200, (self.settings.num_ctx - overhead) // 3, self.settings.max_output_tokens // 2)
         if budget < 64:
             raise TranslationRequestError("context_budget: 上下文或输出预算太小，请增加 num_ctx / max_output_tokens")
-        queue = [(part, 0) for part in split_source(source, budget)]
-        started = time.perf_counter()
-        completed_chars = 0
-        completed_parts: list[str] = []
-        segment_cache: dict[str, dict[str, Any]] = {}
-        all_issues: list[str] = []
-        generated_tokens = 0
-        tokens_known = True
-        total_eval_ns = 0
-        eval_known = True
-        model = self.settings.model_name
-        yield {"type": "plan", "total_chunks": len(queue), "total_chars": len(source), "completed_chars": 0, "completed_chunks": 0}
-        index = 0
-        while index < len(queue):
-            part, depth = queue[index]
-            prefix = part[:len(part) - len(part.lstrip())]
-            suffix = part[len(part.rstrip()):] if part.rstrip() != part else ""
-            content = part.strip()
-            segment_body = dict(body, text=content)
-            base = {"chunk_index": index + 1, "total_chunks": len(queue), "completed_chunks": index,
-                    "completed_chars": completed_chars, "total_chars": len(source)}
-            try:
-                protected_part = protect_text(content)
-                remaining = protected_part.protected
-                for token in protected_part.tokens:
-                    remaining = remaining.replace(token, "")
-                if content in segment_cache:
-                    events = iter([segment_cache[content]])
-                elif not content or not remaining.strip():
-                    events = iter([{"type": "complete", "translation": content, "model": model, "quality_issues": [], "metrics": {}}])
-                else:
-                    events = self._translate_segment_stream(segment_body)
-                try:
-                    for event in events:
-                        if event["type"] == "usage":
-                            usage = event["metrics"]
-                            if usage.get("generated_tokens") is None:
-                                tokens_known = False
-                            else:
-                                generated_tokens += usage["generated_tokens"]
-                            if usage.get("eval_duration_ns") is None:
-                                eval_known = False
-                            else:
-                                total_eval_ns += usage["eval_duration_ns"]
-                        elif event["type"] == "complete":
-                            segment_result = event
-                        else:
-                            event.update(base)
-                            event["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
-                            yield event
-                finally:
-                    close = getattr(events, "close", None)
-                    if close:
-                        close()
-            except (TranslationOutputError, LlamaError) as error:
-                message = str(error)
-                if depth < 2 and any(word in message.lower() for word in ("output_truncated", "context", "exceed")):
-                    smaller = split_source(part, max(32, token_cost(protect_text(part).protected) // 2))
-                    if len(smaller) > 1:
-                        queue[index:index + 1] = [(item, depth + 1) for item in smaller]
-                        yield {"type": "retry", **base, "total_chunks": len(queue), "issues": ["segment_subdivided"]}
-                        continue
-                raise TranslationOutputError(f"第 {index + 1}/{len(queue)} 段失败；已保留 {index} 段。原因: {message}") from error
-            translated = prefix + segment_result["translation"] + suffix if content else part
-            segment_cache[content] = segment_result
-            completed_parts.append(translated)
-            completed_chars += len(part)
-            all_issues.extend(segment_result.get("quality_issues", []))
-            model = segment_result.get("model", model)
-            index += 1
-            yield {"type": "segment_complete", "translation": translated, "chunk_index": index,
-                   "completed_chunks": index, "total_chunks": len(queue), "completed_chars": completed_chars,
-                   "total_chars": len(source)}
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        metrics = self._metrics({"eval_count": generated_tokens if tokens_known else None,
-                                 "eval_duration": total_eval_ns if eval_known else None, "done_reason": "stop"}, elapsed_ms)
-        yield {"type": "complete", "translation": "".join(completed_parts), "model": model,
-               "quality_issues": sorted(set(all_issues)), "metrics": metrics,
-               "completed_chars": len(source), "total_chars": len(source), "completed_chunks": len(queue), "total_chunks": len(queue)}
+        while len(self._jobs) >= 8:
+            oldest = min(self._jobs, key=lambda key: self._jobs[key].updated_at)
+            del self._jobs[oldest]
+        job = TranslationJob(uuid.uuid4().hex, fingerprint, source, self.settings.model_name,
+                             [(part, 0) for part in split_source(source, budget)])
+        self._jobs[job.id] = job
+        return job
 
-    def _translate_segment_stream(self, body: dict[str, Any]):
+    def _translate_document(self, body: dict[str, Any]):
+        job = self._get_job(body)
+        self._active_job = job
+        started = time.perf_counter()
+        in_flight = False
+        elapsed = lambda: job.elapsed_ms + (time.perf_counter() - started) * 1000
+        try:
+            # The server's checkpoint is authoritative, even if the client lost
+            # the last segment event while disconnecting. Never append it twice.
+            yield {"type": "plan", **job.checkpoint(), "elapsed_ms": round(elapsed(), 1)}
+            while len(job.completed) < len(job.queue):
+                if job.cancel.is_set():
+                    raise TranslationCancelled()
+                index = len(job.completed)
+                part, depth = job.queue[index]
+                prefix = part[:len(part) - len(part.lstrip())]
+                suffix = part[len(part.rstrip()):] if part.rstrip() != part else ""
+                content = part.strip()
+                base = {**job.progress(), "chunk_index": index + 1}
+                try:
+                    protected_part = protect_text(content)
+                    remaining = protected_part.protected
+                    for token in protected_part.tokens:
+                        remaining = remaining.replace(token, "")
+                    if content in job.cache:
+                        events = iter([job.cache[content]])
+                    elif not content or not remaining.strip():
+                        events = iter([{"type": "complete", "translation": content, "model": job.model, "quality_issues": []}])
+                    else:
+                        in_flight = True
+                        events = self._translate_segment_stream(dict(body, text=content), job.cancel)
+                    segment_result = None
+                    try:
+                        for event in events:
+                            if job.cancel.is_set():
+                                raise TranslationCancelled()
+                            if event["type"] == "usage":
+                                usage = event["metrics"]
+                                if usage.get("generated_tokens") is None:
+                                    job.tokens_known = False
+                                else:
+                                    job.generated_tokens += usage["generated_tokens"]
+                                if usage.get("eval_duration_ns") is None:
+                                    job.eval_known = False
+                                else:
+                                    job.eval_ns += usage["eval_duration_ns"]
+                            elif event["type"] == "complete":
+                                segment_result = event
+                            else:
+                                yield {**event, **base, "elapsed_ms": round(elapsed(), 1)}
+                    finally:
+                        close = getattr(events, "close", None)
+                        if close:
+                            close()
+                    in_flight = False
+                    if segment_result is None:
+                        raise TranslationOutputError("incomplete_stream: 当前分段未收到完成确认")
+                except (TranslationOutputError, LlamaError) as error:
+                    if job.cancel.is_set():
+                        raise TranslationCancelled() from error
+                    message = str(error)
+                    if depth < 2 and any(word in message.lower() for word in ("output_truncated", "context", "exceed")):
+                        smaller = split_source(part, max(32, token_cost(protect_text(part).protected) // 2))
+                        if len(smaller) > 1:
+                            job.queue[index:index + 1] = [(item, depth + 1) for item in smaller]
+                            yield {"type": "retry", **job.progress(), "chunk_index": index + 1, "issues": ["segment_subdivided"]}
+                            continue
+                    raise TranslationOutputError(f"第 {index + 1}/{len(job.queue)} 段失败；已保留 {index} 段，可重试剩余分段。原因: {message}") from error
+                if job.cancel.is_set():
+                    raise TranslationCancelled()
+                translated = prefix + segment_result["translation"] + suffix if content else part
+                job.cache[content] = segment_result
+                job.completed.append(translated)
+                job.completed_chars += len(part)
+                job.issues.update(segment_result.get("quality_issues", []))
+                job.model = segment_result.get("model", job.model)
+                job.updated_at = time.monotonic()
+                yield {"type": "segment_complete", **job.progress(), "translation": translated,
+                       "chunk_index": len(job.completed), "elapsed_ms": round(elapsed(), 1)}
+            metrics = self._metrics({"eval_count": job.generated_tokens if job.tokens_known else None,
+                                     "eval_duration": job.eval_ns if job.eval_known else None, "done_reason": "stop"}, elapsed())
+            yield {"type": "complete", **job.checkpoint(), "model": job.model,
+                   "quality_issues": sorted(job.issues), "metrics": metrics}
+        except TranslationCancelled:
+            if in_flight:
+                job.tokens_known = False
+                job.eval_known = False
+            yield {"type": "cancelled", **job.checkpoint(), "message": "已取消，已完成分段保留，可继续翻译"}
+        except GeneratorExit:
+            if in_flight:
+                job.tokens_known = False
+                job.eval_known = False
+            raise
+        finally:
+            job.elapsed_ms = elapsed()
+            job.updated_at = time.monotonic()
+
+    def _translate_segment_stream(self, body: dict[str, Any], cancel: threading.Event | None = None):
         try:
             request = parse_translation_input(body, self.settings.default_target_language)
         except ValueError as error:
@@ -207,6 +271,8 @@ class TranslationEngine:
         model = client.resolve_model()
         attempts = 2 if self.settings.retry_on_bad_output else 1
         for attempt in range(attempts):
+            if cancel is not None and cancel.is_set():
+                raise TranslationCancelled()
             current_prompt = prompt
             if attempt:
                 current_prompt = (
@@ -233,6 +299,8 @@ class TranslationEngine:
             )
             with closing(stream):
                 for event in stream:
+                    if cancel is not None and cancel.is_set():
+                        raise TranslationCancelled()
                     message = event.get("message")
                     delta = message.get("content", "") if isinstance(message, dict) else ""
                     if isinstance(delta, str) and delta:

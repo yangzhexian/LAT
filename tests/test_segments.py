@@ -111,3 +111,66 @@ class SegmentTests(unittest.TestCase):
             list(engine.translate_stream(body))
         first.close()
         self.assertEqual(list(engine.translate_stream(body))[-1]["type"], "complete")
+
+    def test_resume_uses_authoritative_prefix_and_skips_finished_work(self):
+        manager = Manager()
+        engine = TranslationEngine(Settings(), manager)
+        body = {"text": "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.", "target_language": "Chinese"}
+        stream = engine.translate_stream(body)
+        plan = next(stream)
+        for event in stream:
+            if event["type"] == "segment_complete":
+                prefix = event["translation"]
+                break
+        stream.close()
+        resumed = list(engine.translate_stream(dict(body, job_id=plan["job_id"])))
+        self.assertEqual(resumed[0]["translation"], prefix)
+        self.assertEqual(resumed[0]["completed_chunks"], 1)
+        self.assertEqual(resumed[-1]["translation"], body["text"])
+        self.assertEqual(manager.client.calls, 3)
+        list(engine.translate_stream(dict(body, job_id=plan["job_id"])))
+        self.assertEqual(manager.client.calls, 3)
+
+    def test_cancel_preserves_checkpoint_and_changed_input_is_rejected(self):
+        manager = Manager()
+        engine = TranslationEngine(Settings(), manager)
+        body = {"text": "First.\n\nSecond.", "target_language": "Chinese"}
+        stream = engine.translate_stream(body)
+        plan = next(stream)
+        for event in stream:
+            if event["type"] == "segment_complete":
+                break
+        engine.cancel_translation(plan["job_id"])
+        self.assertEqual(list(stream)[-1]["type"], "cancelled")
+        with self.assertRaisesRegex(TranslationRequestError, "checkpoint_mismatch"):
+            list(engine.translate_stream(dict(body, text="Changed", job_id=plan["job_id"])))
+        events = list(engine.translate_stream(dict(body, job_id=plan["job_id"])))
+        self.assertEqual(events[-1]["translation"], body["text"])
+        self.assertEqual(manager.client.calls, 2)
+
+    def test_failed_segment_can_be_retried_without_replaying_prefix(self):
+        from unittest.mock import patch
+        engine = TranslationEngine(Settings(), Manager())
+        body = {"text": "First.\n\nSecond.", "target_language": "Chinese"}
+        original = engine._translate_segment_stream
+        def fail_second(request, cancel=None):
+            if request["text"] == "Second.":
+                raise TranslationOutputError("temporary failure")
+            yield from original(request, cancel)
+        with patch.object(engine, "_translate_segment_stream", side_effect=fail_second):
+            stream = engine.translate_stream(body)
+            plan = next(stream)
+            with self.assertRaisesRegex(TranslationOutputError, "temporary failure"):
+                list(stream)
+        events = list(engine.translate_stream(dict(body, job_id=plan["job_id"])))
+        self.assertEqual(events[0]["completed_chunks"], 1)
+        self.assertEqual(events[-1]["translation"], body["text"])
+        self.assertEqual(engine.manager.client.calls, 2)
+
+    def test_checkpoint_expiry(self):
+        engine = TranslationEngine(Settings(), Manager())
+        body = {"text": "Hello", "target_language": "Chinese"}
+        plan = list(engine.translate_stream(body))[0]
+        engine._jobs[plan["job_id"]].updated_at -= 3601
+        with self.assertRaisesRegex(TranslationRequestError, "checkpoint_expired"):
+            list(engine.translate_stream(dict(body, job_id=plan["job_id"])))

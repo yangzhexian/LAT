@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { translateStream } from "../../lib/api";
+import { cancelTranslation, translateStream } from "../../lib/api";
 import { languageName } from "../../lib/languages";
 import { normalizeForTranslation } from "../../lib/text";
 import type {
@@ -61,6 +61,23 @@ export function TranslatorWorkspace({
   const [historyError, setHistoryError] = useState("");
   const controller = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  const checkpoint = useRef<{ id: string; identity: string } | null>(null);
+  const [resumable, setResumable] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const normalized = normalizeForTranslation(source, settings.removeLineBreaks);
+  const identity = JSON.stringify([normalized, sourceLanguage, targetLanguage, status.active_model || status.model_configured]);
+  const canResume = resumable && checkpoint.current?.identity === identity;
+  function clearCheckpoint() { checkpoint.current = null; setResumable(false); }
+  async function cancel() {
+    setCancelling(true);
+    const activeController = controller.current;
+    try {
+      if (checkpoint.current) await cancelTranslation(checkpoint.current.id);
+      activeController?.abort();
+    } catch (error) {
+      setMessage("取消请求失败，请重试：" + String(error));
+    } finally { setCancelling(false); }
+  }
   useEffect(() => () => controller.current?.abort(), []);
   async function refreshHistory() {
     try { setHistory(await readHistory()); setHistoryError(""); }
@@ -73,6 +90,7 @@ export function TranslatorWorkspace({
   }
   function restoreHistory(row: TranslationHistory) {
     if (busyRef.current) return;
+    clearCheckpoint();
     setSource(row.source); setTranslation(row.translation);
     setSourceLanguage(row.sourceLanguage); setTargetLanguage(row.targetLanguage);
     setMetrics(row.metrics || null); setProgress(null); setMessage("已恢复历史记录"); setPage("translate");
@@ -98,33 +116,40 @@ export function TranslatorWorkspace({
     }
   }
 
-  async function translate() {
+  async function translate(restart = false) {
     if (!source.trim() || busyRef.current || !status.ready || modelBusy || sourceChars > inputLimit) return;
     busyRef.current = true;
     controller.current = new AbortController();
     setBusy(true);
-    setTranslation("");
-    setMetrics(null);
-    setProgress(null);
+    const resume = !restart && canResume ? checkpoint.current : null;
+    if (!resume) { clearCheckpoint(); setTranslation(""); setMetrics(null); setProgress(null); }
 
     setMessage("模型正在生成译文…");
     try {
-      const normalized = normalizeForTranslation(source, settings.removeLineBreaks);
+
       let finalEvent: StreamEvent | null = null;
       await translateStream(
         {
+          job_id: resume?.id,
           text: normalized,
           source_language: languageName(sourceLanguage),
           target_language: languageName(targetLanguage),
         },
         (event) => {
-          if (["plan", "attempt", "progress", "segment_complete", "complete"].includes(event.type)) setProgress((current) => ({ ...current, ...event }));
+          if (event.type === "plan") {
+            if (event.job_id) { checkpoint.current = { id: event.job_id, identity }; setResumable(true); }
+            setTranslation(event.translation || "");
+          }
+          if (event.type === "waiting" || event.type === "cancelled") setMessage(event.message || "已暂停");
+          if (event.type === "cancelled") setTranslation(event.translation || "");
+          if (["plan", "attempt", "progress", "retry", "segment_complete", "cancelled", "complete"].includes(event.type)) setProgress((current) => ({ ...current, ...event }));
           if (event.type === "segment_complete") setTranslation((current) => current + (event.translation || ""));
           if (event.type === "retry") {
             setMessage("当前分段正在安全重试");
           }
           if (event.type === "complete") {
             finalEvent = event;
+            clearCheckpoint();
             setTranslation(event.translation || "");
             setMetrics(event.metrics || null);
             setMessage(event.quality_issues?.length ? "完成 存在质量提示" : "翻译完成");
@@ -139,7 +164,7 @@ export function TranslatorWorkspace({
       if (completed) {
         try {
           await updateHistory({ add: {
-            id: crypto.randomUUID(), createdAt: Date.now(), source, submittedText: normalized,
+            id: completed.job_id || crypto.randomUUID(), createdAt: Date.now(), source, submittedText: normalized,
             translation: completed.translation || "", sourceLanguage, targetLanguage,
             model: completed.model || status.active_model || status.model_configured,
             metrics: completed.metrics,
@@ -148,7 +173,7 @@ export function TranslatorWorkspace({
         } catch { setMessage("翻译完成，但历史记录未能保存到本机"); }
       }
     } catch (error) {
-      setMessage(controller.current?.signal.aborted ? "已取消，保留已完成分段（译文未完成）" : error instanceof Error ? error.message : String(error));
+      setMessage(controller.current?.signal.aborted ? "已取消，已完成分段保留，可继续翻译" : error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
       busyRef.current = false;
@@ -185,9 +210,9 @@ export function TranslatorWorkspace({
       {page === "model" && <section className="model-page">{setupContent || <p className="empty-hint">模型已启用。关闭当前模型后，可选择其他模型。</p>}</section>}
       <div className="translation-page" hidden={page !== "translate"}>
       <div className="workspace-status" role="status">
-        {busy ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段 · ${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}% · ${message}` : message}
+        {busy || canResume ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段 · ${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}% · ${message}` : message}
       </div>
-      {busy && <progress className="translation-progress" aria-label="翻译总进度" max={progress?.total_chars || 1} value={progress?.completed_chars || 0} />}
+      {(busy || canResume) && <progress className="translation-progress" aria-label="翻译总进度" max={progress?.total_chars || 1} value={progress?.completed_chars || 0} />}
       <div className={"workspace " + settings.layout}>
         <TextPane
           title="原文"
@@ -231,14 +256,15 @@ export function TranslatorWorkspace({
           <span>{sourceChars.toLocaleString()} / {inputLimit.toLocaleString()} 字符{sourceChars > inputLimit ? " · 超过输入上限" : ""}</span><br />
           {busy ? "约 " + speed + " tokens/s · " + elapsed : completedMetrics(metrics)}
         </div>
-        {busy && <button className="secondary-button" onClick={() => controller.current?.abort()}>取消翻译</button>}
+        {busy && <button className="secondary-button" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? "正在取消…" : "取消翻译"}</button>}
+        {canResume && !busy && <button className="secondary-button" onClick={() => void translate(true)}>重新翻译</button>}
         <button
           type="button"
           className="primary-button translate-button"
           disabled={busy || modelBusy || !status.ready || !source.trim() || sourceChars > inputLimit}
           onClick={() => void translate()}
         >
-          {busy ? "翻译中…" : "开始翻译"}
+          {busy ? "翻译中…" : canResume ? "继续翻译" : "开始翻译"}
           <span>Ctrl ↵</span>
         </button>
       </footer>
@@ -249,12 +275,12 @@ export function TranslatorWorkspace({
           <button className="secondary-button" disabled={!history.length} onClick={() => { if (window.confirm("清空全部翻译历史？此操作无法撤销。")) void removeHistory(); }}>清空历史</button></header>
         {historyError && <p role="alert">{historyError}</p>}
         {!history.length && <p className="empty-hint">完成翻译后，记录会出现在这里。</p>}
-        {history.map((row) => <article className="history-card" key={row.id}>
+        <div className="history-grid">{history.map((row) => <article className="history-card" key={row.id}>
           <div className="history-meta">{new Date(row.createdAt).toLocaleString()} · {row.sourceLanguage} → {row.targetLanguage} · {row.model}</div>
           <p>{row.source.slice(0, 180)}{row.source.length > 180 ? "…" : ""}</p>
           <details><summary>查看完整记录</summary><div className="history-text">{row.source}</div><hr /><div className="history-text">{row.translation}</div></details>
           <div className="history-actions"><button className="secondary-button" disabled={busy} onClick={() => restoreHistory(row)}>恢复到工作区</button><button className="mini-button" onClick={() => void removeHistory(row.id)}>删除</button></div>
-        </article>)}
+        </article>)}</div>
       </section>}
     </main>
   );

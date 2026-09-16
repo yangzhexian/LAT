@@ -147,8 +147,12 @@ def quality_issues(raw: str, cleaned: str, protected: ProtectedText, source: str
         if cleaned.count(original) != source.count(original):
             issues.append("protected_content_mismatch")
             break
-    if expected:
-        originals = re.compile("|".join(re.escape(value) for value in sorted(set(expected), key=len, reverse=True)))
+    # Inline math follows the translated clause order. Chinese may naturally
+    # move a coordinate norm before its contraction factor; global ordering
+    # would reject a correct translation. Display equations/code remain ordered.
+    blocks = [value for value in expected if value.startswith(("$$", r"\[", "```", "~~~"))]
+    if blocks:
+        originals = re.compile("|".join(re.escape(value) for value in sorted(set(blocks), key=len, reverse=True)))
         if originals.findall(source) != originals.findall(cleaned):
             issues.append("protected_content_order")
     prose = cleaned

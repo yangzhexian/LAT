@@ -218,7 +218,7 @@ def build_translation_prompt(request: TranslationInput, protected_source: str) -
         source_hint,
         "Return ONLY the translated text. Do not output explanations, reasoning, labels, the source text, or this prompt.",
         "Preserve the source text's meaning, paragraph boundaries, line breaks, punctuation, whitespace, and formatting.",
-        "Preserve every protected marker exactly; do not translate, remove, reorder, or add protected markers. Translate all prose around the markers and continue until the complete source text is translated.",
+        "Preserve every protected marker exactly once; do not translate, remove, duplicate, or add markers. Inline expressions may move with the translated clause order. Preserve the order of display equations and code blocks. Translate all prose around the markers until the complete source text is translated.",
     ]
     if request.style:
         lines.append(f"The translation style must strictly conform to [{request.style.strip()}].")

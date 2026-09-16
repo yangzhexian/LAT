@@ -5,6 +5,7 @@ export type ThemeMode = "dark" | "light";
 export interface UserSettings {
   theme: ThemeMode;
   layout: LayoutMode;
+  reduceMotion: boolean;
   autoFont: boolean;
   removeLineBreaks: boolean;
   dataDirectory: string;
@@ -132,6 +133,7 @@ export interface TranslationMetrics {
 }
 
 export interface TranslationRequest {
+  job_id?: string;
   text: string;
   source_language: string;
   target_language: string;
@@ -139,7 +141,8 @@ export interface TranslationRequest {
 }
 
 export interface StreamEvent {
-  type: "plan" | "segment_complete" | "attempt" | "progress" | "retry" | "complete" | "error";
+  job_id?: string;
+  type: "waiting" | "cancelled" | "plan" | "segment_complete" | "attempt" | "progress" | "retry" | "complete" | "error";
   chunk_index?: number;
   total_chunks?: number;
   completed_chunks?: number;
