@@ -183,3 +183,23 @@ html, body, * {
 .model-download-picker select:focus { border-color: var(--accent); }
 .model-download-meta { color: var(--subtle); font-size: 11px; line-height: 1.45; }
 .recommendation-button { justify-self: start; border: 0; padding: 0; background: transparent; color: var(--accent); font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
+
+/* Workspace navigation and document views */
+[hidden] { display: none !important; }
+.translator-screen { height: 100vh; min-height: 640px; padding-left: 96px; }
+.side-nav { position: fixed; inset: 16px auto 16px 16px; width: 60px; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 18px 8px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+.nav-brand { font-size: 12px; font-weight: 800; margin-bottom: 24px; }
+.nav-item { width: 42px; height: 42px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 24px; }
+.nav-item.active { background: var(--control-hover); color: var(--accent); }
+.translation-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.translation-progress { width: 100%; height: 5px; margin: 0 0 10px; accent-color: var(--accent); }
+.workspace.vertical { grid-template-rows: minmax(0, 1fr) 34px minmax(0, 1fr); }
+.settings-page, .history-page { overflow: auto; padding: 24px 0; }
+.settings-page .settings-panel { width: min(640px, 100%); box-shadow: none; }
+.history-card { padding: 20px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); overflow-wrap: anywhere; }
+.history-meta { font-size: 12px; color: var(--muted); }
+.history-text { white-space: pre-wrap; max-height: 320px; overflow: auto; margin: 14px 0; }
+.history-actions { display: flex; gap: 12px; margin-top: 16px; }
+@media (max-width: 1100px) { .translator-screen { padding-left: 88px; } .pane-header { flex-wrap: wrap; padding: 10px; gap: 6px; } }
+.model-page { overflow: auto; flex: 1; min-height: 0; }
+.model-page .setup-screen { min-height: auto; }

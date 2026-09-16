@@ -133,6 +133,8 @@ class LlamaServerClient:
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        if done_reason is None:
+                            raise LlamaError("incomplete_stream: 模型未报告终止原因")
                         yield {
                             "done": True,
                             "done_reason": done_reason,

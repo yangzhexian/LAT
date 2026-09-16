@@ -41,7 +41,7 @@ class StreamingTests(unittest.TestCase):
         settings = Settings(retry_on_bad_output=False)
         engine = TranslationEngine(settings, manager=FakeManager())
         events = list(engine.translate_stream({"text": "你好", "source_language": "Chinese", "target_language": "English"}))
-        self.assertEqual(events[0]["type"], "attempt")
+        self.assertEqual(events[0]["type"], "plan")
         self.assertEqual(events[-1]["type"], "complete")
         self.assertEqual(events[-1]["translation"], "Hello world.")
         self.assertEqual(events[-1]["metrics"]["generated_tokens"], 3)

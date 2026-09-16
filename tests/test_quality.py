@@ -4,6 +4,13 @@ from local_translator.quality import clean_model_output, is_fatal, protect_text,
 
 
 class QualityTests(unittest.TestCase):
+    def test_reordered_or_duplicated_formulas_are_rejected(self):
+        protected = protect_text(r"First $x$ then $y$.")
+        tokens = list(protected.tokens)
+        for raw in (f"{tokens[1]} {tokens[0]}", f"{tokens[0]} {tokens[1]} {tokens[1]}"):
+            cleaned = clean_model_output(raw, protected)
+            self.assertTrue(is_fatal(quality_issues(raw, cleaned, protected, protected.source)))
+
     def test_end_source_wrappers_are_cleaned_without_rejecting_translation(self):
         for marker in ("[结束源文本]", "[End Source Text]"):
             protected = protect_text("你好")

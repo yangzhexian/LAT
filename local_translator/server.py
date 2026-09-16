@@ -108,7 +108,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"status": "ok", "service": "lat-local-translator"})
                 return
             if self.path == "/admin/status":
-                self._json(200, self.app.engine.manager.status())
+                self._json(200, {**self.app.engine.manager.status(), "max_input_chars": self.app.settings.max_input_chars})
                 return
             if self.path.startswith("/admin/environment") or self.path == "/admin/runtime/status":
                 if urllib.parse.urlparse(self.path).path == "/admin/environment":
@@ -226,13 +226,21 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        stream = self.app.engine.translate_stream(body)
         try:
-            for event in self.app.engine.translate_stream(body):
+            for event in stream:
                 self.wfile.write(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
         except (TranslationRequestError, TranslationOutputError, LlamaError) as error:
-            self.wfile.write(f"data: {json.dumps({'type': 'error', 'message': str(error)}, ensure_ascii=False)}\n\n".encode("utf-8"))
-            self.wfile.flush()
+            try:
+                self.wfile.write(f"data: {json.dumps({'type': 'error', 'message': str(error)}, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            stream.close()
 
     def _chat_completion(self, body: dict[str, Any], text: str, model: str) -> None:
         completion_id = f"chatcmpl-local-{uuid.uuid4().hex}"

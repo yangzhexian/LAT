@@ -43,6 +43,7 @@ export interface InstalledModelStatus {
 }
 
 export interface LocalStatus {
+  max_input_chars?: number;
   backend: "llama.cpp";
   ready: boolean;
   owned_process: boolean;
@@ -138,7 +139,12 @@ export interface TranslationRequest {
 }
 
 export interface StreamEvent {
-  type: "attempt" | "progress" | "retry" | "complete" | "error";
+  type: "plan" | "segment_complete" | "attempt" | "progress" | "retry" | "complete" | "error";
+  chunk_index?: number;
+  total_chunks?: number;
+  completed_chunks?: number;
+  completed_chars?: number;
+  total_chars?: number;
   attempt?: number;
   max_attempts?: number;
   generated_chars?: number;

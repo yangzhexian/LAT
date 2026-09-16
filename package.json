@@ -12,7 +12,8 @@
     "test:python": "python -m unittest discover -s tests -v",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:frontend": "node --test tests/frontend.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
@@ -28,6 +29,7 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.2",
+    "fake-indexeddb": "^6.2.5",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   },

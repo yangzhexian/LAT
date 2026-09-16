@@ -196,8 +196,10 @@ export function cancelDownload(): Promise<unknown> {
 export async function translateStream(
   body: TranslationRequest,
   onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(GATEWAY_URL + "/translate/stream", {
+    signal,
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -361,19 +361,18 @@ export default function App() {
       />
     );
   } else {
-    content = status ? (
-      <TranslatorWorkspace
-        status={status}
-        settings={settings}
-        onSettingsChange={(next) => setSettings((current) => ({ ...current, ...next }))}
-        onDisable={() => void disableModel()}
-      />
-    ) : null;
+    content = null;
   }
 
   return (
     <MathJaxContext version={3} config={mathJaxConfig} src="/mathjax/tex-chtml.js">
-      {content}
+      {(screen === "loading" || screen === "error") && content}
+      {status && <div hidden={screen === "loading" || screen === "error"}>
+        <TranslatorWorkspace status={status} settings={settings} modelBusy={busy}
+          setupContent={screen === "select" ? content : null}
+          onSettingsChange={(next) => setSettings((current) => ({ ...current, ...next }))}
+          onDisable={() => void disableModel()} />
+      </div>}
     </MathJaxContext>
   );
 }

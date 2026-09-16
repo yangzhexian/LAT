@@ -147,6 +147,10 @@ def quality_issues(raw: str, cleaned: str, protected: ProtectedText, source: str
         if cleaned.count(original) != source.count(original):
             issues.append("protected_content_mismatch")
             break
+    if expected:
+        originals = re.compile("|".join(re.escape(value) for value in sorted(set(expected), key=len, reverse=True)))
+        if originals.findall(source) != originals.findall(cleaned):
+            issues.append("protected_content_order")
     prose = cleaned
     for original in protected.tokens.values():
         prose = prose.replace(original, "")
@@ -158,4 +162,4 @@ def quality_issues(raw: str, cleaned: str, protected: ProtectedText, source: str
 
 
 def is_fatal(issues: list[str]) -> bool:
-    return any(issue in {"empty_output", "prompt_leak", "missing_protected_token", "protected_content_mismatch", "repetition", "abnormally_long", "output_truncated", "incomplete_stream"} for issue in issues)
+    return any(issue in {"empty_output", "prompt_leak", "missing_protected_token", "protected_content_mismatch", "protected_content_order", "repetition", "abnormally_long", "output_truncated", "incomplete_stream"} for issue in issues)

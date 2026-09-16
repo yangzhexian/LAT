@@ -8,11 +8,9 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProps) {
   return (
-    <div className="settings-backdrop" onMouseDown={onClose}>
+    <div className="settings-page">
       <section
         className="settings-panel"
-        role="dialog"
-        aria-modal="true"
         aria-label="设置"
         onMouseDown={(event) => event.stopPropagation()}
       >

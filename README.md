@@ -17,6 +17,10 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 - 支持断点续传、备用下载源、网络重试、速度显示、取消下载和 SHA-256 校验
 - 支持中文、英文、日文、韩文、法文、德文、俄文等 Hy-MT2 支持语言的互译
 - 支持左右或上下排版，并可交换源语言与目标语言
+- 左侧导航提供翻译、历史、模型与设置；关闭模型后保留当前工作区
+- 翻译历史仅保存在本机 IndexedDB，自动保留最近 30 条，支持恢复、删除和清空
+- 默认支持 100,000 字符长文本，按段落及上下文预算分段，显示已完成段数与原文处理进度
+- 支持取消并保留已完成分段；失败段局部重试，同一请求内重复段落复用已校验译文
 - 支持明暗主题、自动字体大小和合并换行设置
 - LaTeX 预览支持 `$...$`、`$$...$$`、`\(...\)` 和 `\[...\]`
 - 使用本地 MathJax 渲染 LaTeX，预览字体采用 Times New Roman
@@ -146,7 +150,8 @@ npm run build:installer
 | `top_k` | `20` | Top-k 采样参数 |
 | `repetition_penalty` | `1.05` | 重复惩罚 |
 | `num_ctx` | `8192` | 上下文长度 |
-| `max_output_tokens` | `4096` | 最大输出 token 数 |
+| `max_output_tokens` | `4096` | 每段最大输出 token 数 |
+| `max_input_chars` | `100000` | 整篇输入字符上限，可用 `LLM_TRANSLATOR_MAX_INPUT_CHARS` 覆盖 |
 
 环境变量优先级高于配置文件：
 
@@ -261,7 +266,7 @@ docs(readme): document model selection
 
 ### 翻译内容包含 prompt 或结果被截断
 
-LAT 会使用 Hy-MT2 官方翻译指令模板，并对 URL、代码占位符和 LaTeX 公式进行保护。若输出仍包含指令文本，网关会执行质量检查并在允许时安全重试。长文档建议分段翻译，并确认模型已经完成加载。
+LAT 会使用 Hy-MT2 官方翻译指令模板，并对 URL、代码占位符和 LaTeX 公式进行保护。若输出仍包含指令文本，网关会执行质量检查并在允许时安全重试。长文档由网关自动分段；超出模型预算的失败段最多细分两层。取消或失败的部分结果不会写入完整翻译历史。
 
 ## 参考资料
 
@@ -276,3 +281,15 @@ LAT 会使用 Hy-MT2 官方翻译指令模板，并对 URL、代码占位符和 
 ## License
 
 LAT 以 MIT 许可证发布，详见 [LICENSE](LICENSE)。
+
+## 长文本事件接口
+
+`POST /translate/stream` 保留原请求字段，新增 `plan`、`segment_complete` 事件。
+`completed_chars / total_chars` 表示已经通过校验的原文比例，`completed_chunks / total_chunks` 表示分段进度；运行时细分可能增加总段数，原文比例不回退。
+`segment_complete.translation` 只包含本段译文；`complete.translation` 包含整篇译文。客户端仅收到 `complete` 后才应视为成功。
+实时速度是估算值，最终指标使用模型计数和包含重试的总耗时。关闭 SSE 连接会清理上游推理连接；预填充阶段的取消可能等待下一次模型输出。
+`GET /admin/status` 新增 `max_input_chars`。现有 `/translate` 和 OpenAI 兼容响应结构保持兼容，共用分段引擎。
+
+历史保存在当前 WebView 的 `lat.history` 数据库中，不随模型目录迁移，也不进行云同步。开发浏览器和安装版使用各自的本地存储。
+
+前端逻辑回归测试：`npm run test:frontend`。
