@@ -17,7 +17,7 @@ class EchoClient:
 
     def chat_stream(self, model, messages, options):
         self.calls += 1
-        source = messages[0]["content"].split("[Source Text]\n")[1].split("\n[End Source Text]")[0]
+        source = messages[0]["content"].split("\n\n", 1)[1]
         try:
             yield {"message": {"content": source}}
             yield {"done": True, "done_reason": "length" if self.truncate_first and self.calls == 1 else "stop", "eval_count": 10}

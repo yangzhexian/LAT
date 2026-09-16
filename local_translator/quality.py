@@ -13,7 +13,8 @@ FORMULA_PATTERNS = (
 
 PROTECTED_PATTERNS = (
     re.compile(r"```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~"),
-    re.compile(r"\[(?:end source text|end translation|source text|translation|结束源文本|结束翻译|源文本结束)\]", re.I),
+    re.compile(r"\[(?:end source text|end translation|source text|translation|结束源文本|结束翻译|源文本结束|源文本)\]", re.I),
+    re.compile(r"(?<=\]\()[^\s)]+(?=\))"),
     re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE),
     re.compile(r"`[^`\n]+`"),
     re.compile(r"<[^>\n]+>"),
@@ -103,7 +104,7 @@ def clean_model_output(value: str, protected: ProtectedText) -> str:
         flags=re.IGNORECASE,
     )[0].strip()
     # Strip only standalone trailing wrapper lines absent from the source.
-    boundary = re.compile(r"\s*\[(?:end source text|end translation|结束源文本|结束翻译|源文本结束)\]\s*$", re.I)
+    boundary = re.compile(r"\s*\[(?:end source text|end translation|结束源文本|结束翻译|源文本结束|源文本)\]\s*$", re.I)
     while (match := boundary.search(result)) is not None:
         if match.group(0).strip().lower() in protected.source.lower():
             break
@@ -118,7 +119,7 @@ def quality_issues(raw: str, cleaned: str, protected: ProtectedText, source: str
     # Harmless trailing delimiters are cleaned first; actual prompt echoes
     # remain fatal. Do not interpret source-owned literal markers as leaks.
     checked_raw = raw
-    checked_raw = re.sub(r"(?:\s*\[(?:end source text|end translation|结束源文本|结束翻译|源文本结束)\])+\s*$", "", checked_raw, flags=re.I)
+    checked_raw = re.sub(r"(?:\s*\[(?:end source text|end translation|结束源文本|结束翻译|源文本结束|源文本)\])+\s*$", "", checked_raw, flags=re.I)
     for original in protected.tokens.values():
         checked_raw = checked_raw.replace(original, "")
     lowered = checked_raw.lower()
@@ -131,7 +132,20 @@ def quality_issues(raw: str, cleaned: str, protected: ProtectedText, source: str
         "<|system|>",
         "<|user|>",
     )
-    if any(marker in lowered for marker in leak_markers):
+    # Match distinctive translated contract sentences, not general words such
+    # as "translation". Exempt a category when it is itself source material.
+    contract_patterns = (
+        r"(?:return|output) only the translated (?:text|result)|(?:仅|只)(?:需要)?(?:返回|输出)翻译(?:后)?(?:的)?(?:文本|结果|译文)",
+        r"do not output explanations|不要输出解释、推理|不要额外解释",
+        r"preserve every protected marker|每个受保护的标记|保留所有.*?占位符|keep all __lat_formula",
+        r"preserve the source text.s meaning|保留源文本的含义",
+        r"translate all prose around|围绕标记翻译所有",
+    )
+    translated_contract = any(
+        re.search(pattern, lowered, re.I) and not re.search(pattern, source, re.I)
+        for pattern in contract_patterns
+    )
+    if translated_contract or any(marker in lowered for marker in (*leak_markers, "[源文本]")):
         issues.append("prompt_leak")
     if source.strip() and cleaned.strip() == source.strip():
         # This is not necessarily wrong for same-language translation, so it

@@ -273,13 +273,7 @@ class TranslationEngine:
         for attempt in range(attempts):
             if cancel is not None and cancel.is_set():
                 raise TranslationCancelled()
-            current_prompt = prompt
-            if attempt:
-                current_prompt = (
-                    "IMPORTANT: Your previous response violated the output contract. "
-                    "Ignore all previous output and return only the translation without labels.\n\n"
-                    + prompt
-                )
+            current_prompt = prompt if attempt == 0 else build_translation_prompt(request, protected.protected, preserve_formatting=False)
             started = time.perf_counter()
             raw_parts: list[str] = []
             final_response: dict[str, Any] = {}

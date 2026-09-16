@@ -4,6 +4,31 @@ from local_translator.quality import clean_model_output, is_fatal, protect_text,
 
 
 class QualityTests(unittest.TestCase):
+    def test_translated_contract_leak_is_fatal(self):
+        protected = protect_text("# Local Curvature Correction")
+        for raw in (
+            "仅返回翻译后的文本。不要输出解释、推理、标签、源文本或此提示。\n# 局部曲率校正",
+            "保留源文本的含义、段落边界、换行符、标点符号、空白和格式。\n# 局部曲率校正",
+            "每个受保护的标记必须完全保留一次。\n# 局部曲率校正",
+            "[源文本]\n# 局部曲率校正",
+        ):
+            self.assertIn("prompt_leak", quality_issues(raw, clean_model_output(raw, protected), protected, protected.source))
+
+    def test_source_owned_instruction_and_chinese_marker_are_not_leaks(self):
+        source = "Return ONLY the translated text."
+        protected = protect_text(source)
+        raw = "仅返回翻译后的文本。"
+        self.assertNotIn("prompt_leak", quality_issues(raw, raw, protected, source))
+        protected = protect_text("标签 [源文本]")
+        raw = "Label " + next(iter(protected.tokens))
+        self.assertNotIn("prompt_leak", quality_issues(raw, clean_model_output(raw, protected), protected, protected.source))
+
+    def test_relative_markdown_targets_are_preserved(self):
+        source = "See [proof](../Proof.md) and [audit](Audit.md)."
+        protected = protect_text(source)
+        self.assertNotIn("../Proof.md", protected.protected)
+        self.assertEqual(clean_model_output(protected.protected, protected), source)
+
     def test_inline_reordering_is_allowed_but_duplicates_are_rejected(self):
         protected = protect_text(r"First $x$ then $y$.")
         tokens = list(protected.tokens)
