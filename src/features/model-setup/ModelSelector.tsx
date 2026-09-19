@@ -1,3 +1,4 @@
+import { Button } from "../../components/Controls";
 import { useEffect, useState } from "react";
 import { formatBytes } from "../../lib/text";
 import type { DownloadState, LocalStatus, ModelOption } from "../../types";
@@ -80,9 +81,9 @@ export function ModelSelector({
         {status?.runtime?.installed
           ? "llama.cpp " + (status.version || "已安装")
           : "需要安装 llama.cpp"}
-        <button type="button" className="text-button" onClick={onRefresh}>
+        <Button type="button" className="text-button" onClick={onRefresh}>
           刷新
-        </button>
+        </Button>
       </div>
       {hasModels && (
         <details
@@ -101,7 +102,7 @@ export function ModelSelector({
           </summary>
           <div className="model-list">
             {models.map((model) => (
-              <button
+              <Button
                 type="button"
                 key={model.name}
                 className={"model-card " + (selectedModel === model.name ? "selected" : "")}
@@ -115,7 +116,7 @@ export function ModelSelector({
                   <strong>{model.name}</strong>
                   <small>{model.size ? formatBytes(model.size) : "未知大小"} · GGUF</small>
                 </span>
-              </button>
+              </Button>
             ))}
           </div>
         </details>
@@ -163,14 +164,14 @@ export function ModelSelector({
               </small>
             )}
             {recommendedOption && recommendedOption.id !== downloadModel && (
-              <button
+              <Button
                 type="button"
                 className="recommendation-button"
                 disabled={loading || download.busy}
                 onClick={() => onSelectDownloadModel(recommendedOption.id)}
               >
                 使用硬件推荐版本 {recommendedOption.label}
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -200,15 +201,15 @@ export function ModelSelector({
           </div>
         )}
         <div className="download-action-row">
-          <button
+          <Button
             type="button"
             className="custom-directory-toggle"
             disabled={loading || download.busy}
             onClick={onOpenCustomDirectory}
           >
             {customDirectoryOpen ? "收起自定义模型路径" : "自定义模型路径"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             className={download.busy ? "cancel-button" : "secondary-button download-button"}
             disabled={download.cancelRequested}
@@ -219,7 +220,7 @@ export function ModelSelector({
                 ? "正在停止…"
                 : "终止下载"
               : "开始下载"}
-          </button>
+          </Button>
         </div>
         {customDirectoryOpen && (
           <div className="custom-directory-panel">
@@ -235,7 +236,7 @@ export function ModelSelector({
                 }}
                 aria-label="自定义模型路径"
               />
-              <button
+              <Button
                 type="button"
                 className="folder-button"
                 disabled={loading || download.busy}
@@ -247,7 +248,7 @@ export function ModelSelector({
                   <path d="M3.5 6.5h6l1.7 2h9.3v9.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2z" />
                   <path d="M3.5 6.5V5.8a1.3 1.3 0 0 1 1.3-1.3h4.2l1.6 2h8.7a1.2 1.2 0 0 1 1.2 1.2v.8" />
                 </svg>
-              </button>
+              </Button>
             </div>
             <div className="custom-directory-footer">
               <small>
@@ -255,27 +256,27 @@ export function ModelSelector({
                   ? "当前目录 " + displayedDirectory
                   : "默认目录为安装路径下的 .lat-runtime"}
               </small>
-              <button
+              <Button
                 type="button"
                 className="text-button"
                 disabled={loading || download.busy}
                 onClick={onApplyDirectory}
               >
                 应用路径
-              </button>
+              </Button>
             </div>
           </div>
         )}
       </details>
 
-      <button
+      <Button
         type="button"
         className="primary-button enable-button"
         disabled={!selectedModel || loading || !models.length}
         onClick={onEnable}
       >
         {loading ? "正在启用模型…" : "启用模型"}
-      </button>
+      </Button>
       <p className="caption">当前针对 Hy-MT2 翻译策略进行了优化 其他模型仍可发现和尝试</p>
     </section>
   );

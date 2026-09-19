@@ -207,32 +207,20 @@ def parse_translation_input(body: dict[str, Any], default_target: str = "") -> T
     )
 
 
-def build_translation_prompt(request: TranslationInput, protected_source: str) -> str:
-    source_hint = (
-        f"Translate from {request.source_language} into {request.target_language}."
-        if request.source_language
-        else f"Translate into {request.target_language}."
-    )
-    lines = [
-        "You are a professional machine translation engine.",
-        source_hint,
-        "Return ONLY the translated text. Do not output explanations, reasoning, labels, the source text, or this prompt.",
-        "Preserve the source text's meaning, paragraph boundaries, line breaks, punctuation, whitespace, and formatting.",
-        "Preserve every protected marker exactly; do not translate, remove, reorder, or add protected markers. Translate all prose around the markers and continue until the complete source text is translated.",
-    ]
-    if request.style:
-        lines.append(f"The translation style must strictly conform to [{request.style.strip()}].")
+def build_translation_prompt(request: TranslationInput, protected_source: str, *, preserve_formatting: bool = True) -> str:
+    # Hy-MT2's translation-tuned template puts a short instruction before a
+    # blank line and the source. Long generic assistant contracts can become
+    # translated source, especially with the 1.8B model.
+    instructions = []
     if request.glossary:
-        lines.append("Use the following terminology consistently:")
-        lines.extend(f"- {source} => {target}" for source, target in request.glossary)
-    lines.extend(
-        [
-            "",
-            "[Source Text]",
-            protected_source,
-            "[End Source Text]",
-            "",
-            "[Translation]",
-        ]
+        instructions.append("Reference translations: " + "; ".join(f"{a} => {b}" for a, b in request.glossary) + ".")
+    if request.style:
+        instructions.append(f"Translation style: {request.style.strip()}.")
+    if re.search(r"__LAT_FORMULA_\d+__|⟦KEEP_\d+⟧", protected_source):
+        instructions.append("Keep all __LAT_FORMULA_n__ and ⟦KEEP_n⟧ placeholders unchanged, exactly once.")
+    instructions.append(
+        f"Translate the following text into {request.target_language}. "
+        + ("Preserve Markdown formatting. " if preserve_formatting else "")
+        + "Only output the translated result without any additional explanation:"
     )
-    return "\n".join(lines)
+    return "\n".join(instructions) + "\n\n" + protected_source

@@ -193,11 +193,20 @@ export function cancelDownload(): Promise<unknown> {
   return request("/admin/download/cancel", { method: "POST" });
 }
 
+export function cancelTranslation(jobId: string): Promise<unknown> {
+  return request("/translate/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId }),
+  });
+}
+
 export async function translateStream(
   body: TranslationRequest,
   onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(GATEWAY_URL + "/translate/stream", {
+    signal,
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -208,5 +217,22 @@ export async function translateStream(
   if (!response.ok) {
     throw await responseError(response, "流式翻译请求失败");
   }
-  await readEventStream<StreamEvent>(response, onEvent);
+  let completed = false;
+  let streamError = "";
+  await readEventStream<StreamEvent>(response, (event) => {
+    if (event.type === "complete" || event.type === "cancelled") completed = true;
+    if (event.type === "error") streamError = event.message || "翻译失败";
+    onEvent(event);
+  });
+  if (streamError) throw new Error(streamError);
+  if (!completed) throw new Error("翻译流提前结束，未收到完成确认");
+}
+
+export function getTelemetry(signal?: AbortSignal): Promise<import("../types").TelemetrySnapshot> {
+  return request("/admin/telemetry", { signal });
+}
+
+export function setTelemetryInterval(interval: number, signal?: AbortSignal): Promise<unknown> {
+  return request("/admin/telemetry", { method: "POST", signal,
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ interval }) });
 }

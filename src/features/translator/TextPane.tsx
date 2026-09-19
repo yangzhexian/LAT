@@ -1,3 +1,4 @@
+import { Button } from "../../components/Controls";
 import { LatexPreview } from "../../components/LatexPreview";
 import { LanguageSelect } from "./LanguageSelect";
 
@@ -8,6 +9,7 @@ interface TextPaneProps {
   preview: boolean;
   fontSize: number;
   readOnly?: boolean;
+  languageDisabled?: boolean;
   onLanguageChange: (value: string) => void;
   onChange?: (value: string) => void;
   onPreviewChange: (value: boolean) => void;
@@ -21,6 +23,7 @@ export function TextPane({
   preview,
   fontSize,
   readOnly,
+  languageDisabled,
   onLanguageChange,
   onChange,
   onPreviewChange,
@@ -31,23 +34,23 @@ export function TextPane({
       <header className="pane-header">
         <div>
           <span className="pane-title">{title}</span>
-          <LanguageSelect value={language} onChange={onLanguageChange} />
+          <LanguageSelect value={language} onChange={onLanguageChange} disabled={languageDisabled} />
         </div>
         <div className="pane-actions">
-          <button
+          <Button
             type="button"
             className={"mini-button " + (!preview ? "active" : "")}
             onClick={() => onPreviewChange(false)}
           >
             文本
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             className={"mini-button " + (preview ? "active" : "")}
             onClick={() => onPreviewChange(true)}
           >
             LaTeX 预览
-          </button>
+          </Button>
         </div>
       </header>
       {preview ? (
@@ -55,6 +58,7 @@ export function TextPane({
       ) : (
         <textarea
           className="text-editor"
+          aria-label={title}
           style={{ fontSize }}
           value={value}
           readOnly={readOnly}

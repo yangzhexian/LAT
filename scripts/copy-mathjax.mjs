@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readdir } from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +10,7 @@ const fontDestination = resolve(root, "public/mathjax/output/chtml/fonts/woff-v2
 
 await mkdir(dirname(destination), { recursive: true });
 await copyFile(source, destination);
+await cp(resolve(root, "node_modules/mathjax/es5/input/tex/extensions"), resolve(root, "public/mathjax/input/tex/extensions"), { recursive: true });
 await mkdir(fontDestination, { recursive: true });
 for (const file of await readdir(fontSource)) {
   if (file.endsWith(".woff")) await copyFile(resolve(fontSource, file), resolve(fontDestination, file));

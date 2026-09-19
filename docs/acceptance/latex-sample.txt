@@ -1,0 +1,30 @@
+The common normalization in (5) cancels between the two logarithms.
+For $\mathcal J=\{1,\ldots,K\}$ or $\mathcal J=\{j:j\ne k\}$, define
+
+$$
+q_{k,\mathcal J}(\mathbf s)
+=\sigma^2+\frac{\sigma^2}{P}\|\mathbf s\|^2
++\sum_{j\in\mathcal J}
+|\mathbf h_k^{\mathsf H}(\mathbf v_j+(\mathbf Z\mathbf s)_j)|^2.
+\tag{15}
+$$
+
+Then exactly
+
+$$
+\boxed{\mathcal F(\mathbf s)=\sum_k w_k
+[\log q_{k,\mathrm{all}}(\mathbf s)-\log q_{k,-k}(\mathbf s)].}
+\tag{16}
+$$
+
+Each term is a real quadratic:
+
+$$
+q(\boldsymbol{s})=\boldsymbol{s}^{\mathsf T}A_q\boldsymbol{s}
++2\boldsymbol{b}_q^{\mathsf T}\boldsymbol{s}+c_q\ge\sigma^2,
+\qquad A_q\succeq0.
+$$
+
+Membership and norm: $x\in\mathbb R^n$, $\|\boldsymbol{x}\|_2$.
+Inline alternatives: \(x\in A\), display alternative: \[\|x\|^2\ge0.\]
+Literal markers in the source must remain literal: [结束源文本].

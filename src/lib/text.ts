@@ -21,7 +21,7 @@ function protectFormulas(value: string): { text: string; formulas: Map<string, s
 
 function restoreFormulas(value: string, formulas: Map<string, string>): string {
   let result = value;
-  for (const [token, formula] of formulas) result = result.replaceAll(token, formula);
+  for (const [token, formula] of formulas) result = result.replaceAll(token, () => formula);
   return result;
 }
 
@@ -57,4 +57,3 @@ export function formatBytes(value?: number): string {
   }
   return `${size.toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
 }
-

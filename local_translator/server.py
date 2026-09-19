@@ -16,6 +16,7 @@ from .environment import inspect_download_environment
 from .engine import TranslationEngine, TranslationOutputError, TranslationRequestError
 from .errors import DownloadCancelled, LlamaError
 from .version import __version__
+from .telemetry import GpuTelemetry
 
 
 LOGGER = logging.getLogger(__name__)
@@ -41,9 +42,11 @@ class App:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.engine = TranslationEngine(settings)
+        self.telemetry = GpuTelemetry()
         self.httpd: ThreadingHTTPServer | None = None
 
     def stop(self) -> None:
+        self.telemetry.stop()
         self.engine.manager.shutdown()
         if self.httpd is not None:
             self.httpd.shutdown()
@@ -107,8 +110,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             if self.path in {"/health", "/v1/health"}:
                 self._json(200, {"status": "ok", "service": "lat-local-translator"})
                 return
+            if self.path == "/admin/telemetry":
+                self._json(200, self.app.telemetry.snapshot())
+                return
             if self.path == "/admin/status":
-                self._json(200, self.app.engine.manager.status())
+                self._json(200, {**self.app.engine.manager.status(), "max_input_chars": self.app.settings.max_input_chars})
                 return
             if self.path.startswith("/admin/environment") or self.path == "/admin/runtime/status":
                 if urllib.parse.urlparse(self.path).path == "/admin/environment":
@@ -129,6 +135,20 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if self.path == "/admin/telemetry":
+                try:
+                    self.app.telemetry.configure(self._read_json().get("interval"))
+                except ValueError as error:
+                    raise TranslationRequestError(str(error)) from error
+                self._json(200, {"status": "configured"})
+                return
+            if self.path == "/translate/cancel":
+                job_id = self._read_json().get("job_id")
+                if not isinstance(job_id, str) or not job_id:
+                    raise TranslationRequestError("job_id 不能为空")
+                self.app.engine.cancel_translation(job_id)
+                self._json(200, {"status": "cancelling", "job_id": job_id})
+                return
             if self.path == "/admin/directory":
                 body = self._read_json()
                 root_dir = body.get("root_dir")
@@ -226,13 +246,21 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        stream = self.app.engine.translate_stream(body)
         try:
-            for event in self.app.engine.translate_stream(body):
+            for event in stream:
                 self.wfile.write(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
         except (TranslationRequestError, TranslationOutputError, LlamaError) as error:
-            self.wfile.write(f"data: {json.dumps({'type': 'error', 'message': str(error)}, ensure_ascii=False)}\n\n".encode("utf-8"))
-            self.wfile.flush()
+            try:
+                self.wfile.write(f"data: {json.dumps({'type': 'error', 'message': str(error)}, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            stream.close()
 
     def _chat_completion(self, body: dict[str, Any], text: str, model: str) -> None:
         completion_id = f"chatcmpl-local-{uuid.uuid4().hex}"
@@ -262,11 +290,13 @@ def serve(settings: Settings) -> None:
     httpd = ThreadingHTTPServer((settings.host, settings.port), RequestHandler)
     httpd.app = app  # type: ignore[attr-defined]
     app.httpd = httpd
+    app.telemetry.start()
     LOGGER.info("translator listening on http://%s:%s", settings.host, settings.port)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         LOGGER.info("received Ctrl+C")
     finally:
+        app.telemetry.stop()
         httpd.server_close()
         app.engine.manager.shutdown()

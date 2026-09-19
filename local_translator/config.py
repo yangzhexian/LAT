@@ -25,7 +25,7 @@ class Settings:
     llama_runtime_variant: str = "cuda-13.3"
     llama_release: str = "b10545"
     request_timeout_seconds: float = 600.0
-    max_input_chars: int = 16000
+    max_input_chars: int = 100000
     max_output_tokens: int = 4096
     num_ctx: int = 8192
     temperature: float = 0.7

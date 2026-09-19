@@ -5,6 +5,11 @@ export type ThemeMode = "dark" | "light";
 export interface UserSettings {
   theme: ThemeMode;
   layout: LayoutMode;
+  reduceMotion: boolean;
+  historyLimit: number;
+  saveHistory: boolean;
+  telemetryInterval: number;
+  telemetryWindow: number;
   autoFont: boolean;
   removeLineBreaks: boolean;
   dataDirectory: string;
@@ -43,6 +48,7 @@ export interface InstalledModelStatus {
 }
 
 export interface LocalStatus {
+  max_input_chars?: number;
   backend: "llama.cpp";
   ready: boolean;
   owned_process: boolean;
@@ -131,6 +137,7 @@ export interface TranslationMetrics {
 }
 
 export interface TranslationRequest {
+  job_id?: string;
   text: string;
   source_language: string;
   target_language: string;
@@ -138,7 +145,13 @@ export interface TranslationRequest {
 }
 
 export interface StreamEvent {
-  type: "attempt" | "progress" | "retry" | "complete" | "error";
+  job_id?: string;
+  type: "waiting" | "cancelled" | "plan" | "segment_complete" | "attempt" | "progress" | "retry" | "complete" | "error";
+  chunk_index?: number;
+  total_chunks?: number;
+  completed_chunks?: number;
+  completed_chars?: number;
+  total_chars?: number;
   attempt?: number;
   max_attempts?: number;
   generated_chars?: number;
@@ -151,4 +164,25 @@ export interface StreamEvent {
   quality_issues?: string[];
   metrics?: TranslationMetrics;
   message?: string;
+}
+
+export interface GpuSample {
+  id: string;
+  name: string;
+  memory_used_mib: number | null;
+  memory_total_mib: number | null;
+  utilization_pct: number | null;
+  power_w: number | null;
+  power_limit_w: number | null;
+  temperature_c: number | null;
+}
+export interface TelemetrySample {
+  timestamp: number;
+  gpus: GpuSample[];
+  message: string;
+}
+
+export interface TelemetrySnapshot extends TelemetrySample {
+  samples: TelemetrySample[];
+  interval: number;
 }

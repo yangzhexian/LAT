@@ -18,6 +18,7 @@ build/
 *.tsbuildinfo
 public/mathjax/*.js
 public/mathjax/output/
+public/mathjax/input/
 src-tauri/target/
 src-tauri/gen/
 src-tauri/binaries/*
