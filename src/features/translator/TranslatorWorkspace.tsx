@@ -284,7 +284,7 @@ export function TranslatorWorkspace({
         {!history.length && <p className="empty-hint">完成翻译后，记录会出现在这里。</p>}
         <div className="history-grid">{history.map((row) => <article className="history-card" key={row.id}>
           <div className="history-meta">{new Date(row.createdAt).toLocaleString()} · {row.sourceLanguage} → {row.targetLanguage} · {row.model}</div>
-          <p>{row.source.slice(0, 180)}{row.source.length > 180 ? "…" : ""}</p>
+          <p className="history-excerpt">{row.source.slice(0, 180)}{row.source.length > 180 ? "…" : ""}</p>
           <details><summary>查看完整记录</summary><div className="history-comparison"><section><h3>原文 · {languageName(row.sourceLanguage)}</h3><div className="history-text">{row.source}</div></section><section><h3>译文 · {languageName(row.targetLanguage)}</h3><div className="history-text">{row.translation}</div></section></div></details>
           <div className="history-actions"><Button className="secondary-button" disabled={busy} onClick={() => restoreHistory(row)}>恢复到工作区</Button><Button className="mini-button" onClick={() => void removeHistory(row.id)}>删除</Button></div>
         </article>)}</div>
