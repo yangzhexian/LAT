@@ -24,3 +24,43 @@ class TelemetryTests(unittest.TestCase):
         result = GpuTelemetry().sample()
         self.assertEqual(result['gpus'], [])
         self.assertTrue(result['message'])
+
+    def test_background_collection_precedes_dashboard_and_stops_cleanly(self):
+        import threading
+        import time
+        monitor = GpuTelemetry()
+        monitor.configure(0.5)
+        ready = threading.Event()
+        calls = []
+        def sample(**kwargs):
+            calls.append(time.monotonic())
+            if len(calls) >= 3:
+                ready.set()
+            return {"timestamp": time.time(), "gpus": [], "message": "test"}
+        with patch.object(monitor, "sample", side_effect=sample):
+            monitor.start()
+            thread = monitor._thread
+            monitor.start()
+            self.assertIs(monitor._thread, thread)
+            try:
+                self.assertTrue(ready.wait(3))
+                snapshot = monitor.snapshot()
+                self.assertGreaterEqual(len(snapshot["samples"]), 2)
+                self.assertEqual(snapshot["interval"], 0.5)
+            finally:
+                monitor.stop()
+            self.assertFalse(thread.is_alive())
+            self.assertGreaterEqual(calls[-1] - calls[0], 0.9)
+
+    def test_history_retains_five_minutes_at_half_second_resolution(self):
+        monitor = GpuTelemetry()
+        for index in range(801):
+            monitor._record({"timestamp": index / 2, "gpus": [], "message": ""})
+        with patch('local_translator.telemetry.time.time', return_value=400):
+            history = monitor.snapshot()["samples"]
+        self.assertEqual(len(history), 601)
+        self.assertEqual(history[0]["timestamp"], 100)
+        self.assertEqual(history[-1]["timestamp"], 400)
+        for invalid in (None, True, 0, 0.1, 10, "0.5"):
+            with self.assertRaises(ValueError):
+                monitor.configure(invalid)

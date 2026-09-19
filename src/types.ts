@@ -181,3 +181,8 @@ export interface TelemetrySample {
   gpus: GpuSample[];
   message: string;
 }
+
+export interface TelemetrySnapshot extends TelemetrySample {
+  samples: TelemetrySample[];
+  interval: number;
+}

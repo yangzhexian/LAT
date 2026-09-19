@@ -45,7 +45,7 @@ class ServerTests(unittest.TestCase):
 
     def test_telemetry_endpoint(self):
         sample = {"timestamp": 1, "gpus": [{"id": "gpu", "power_w": None}], "message": ""}
-        self.httpd.app.telemetry.sample = Mock(return_value=sample)
+        self.httpd.app.telemetry.snapshot = Mock(return_value=sample)
         with urllib.request.urlopen(self.url + "/admin/telemetry") as response:
             self.assertEqual(json.loads(response.read()), sample)
 

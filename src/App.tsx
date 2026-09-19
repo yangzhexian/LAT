@@ -12,6 +12,7 @@ import {
   loadModel,
   selectDataDirectory,
   setDataDirectory,
+  setTelemetryInterval,
   unloadModel,
 } from "./lib/api";
 import { usePersistentSettings } from "./lib/settings";
@@ -59,6 +60,20 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState("");
   const [downloadModel, setDownloadModel] = useState(DEFAULT_DOWNLOAD_MODEL);
   const [settings, setSettings] = usePersistentSettings();
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let active: AbortController | null = null;
+    async function configure() {
+      active = new AbortController();
+      const timeout = setTimeout(() => active?.abort(), 4500);
+      try { await setTelemetryInterval(settings.telemetryInterval, active.signal); }
+      catch { if (!stopped) timer = setTimeout(() => void configure(), 1000); }
+      finally { clearTimeout(timeout); }
+    }
+    void configure();
+    return () => { stopped = true; clearTimeout(timer); active?.abort(); };
+  }, [settings.telemetryInterval]);
   const [busy, setBusy] = useState(false);
   const [modelTransition, setModelTransition] = useState<"loading" | "unloading" | null>(null);
   const modelOperation = useRef(false);

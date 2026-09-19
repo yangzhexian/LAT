@@ -38,7 +38,7 @@ export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProp
         <SelectField label="最多保存" hint="超出上限时淘汰最早的记录" value={settings.historyLimit ?? 30} onChange={changeHistoryLimit}>{[10, 30, 50, 100, 200].map((value) => <option key={value} value={value}>{value} 条</option>)}</SelectField>
       </section>
       <section className="settings-section"><h3>显卡看板</h3>
-        <SelectField label="刷新间隔" hint="仅在模型看板可见时采样" value={settings.telemetryInterval ?? 2} onChange={(telemetryInterval) => onChange({ telemetryInterval })}>{[1, 2, 5].map((value) => <option key={value} value={value}>{value} 秒</option>)}</SelectField>
+        <SelectField label="刷新间隔" hint="从应用启动持续采样" value={settings.telemetryInterval ?? 2} onChange={(telemetryInterval) => onChange({ telemetryInterval })}>{[0.5, 1, 2, 5].map((value) => <option key={value} value={value}>{value} 秒</option>)}</SelectField>
         <SelectField label="趋势范围" value={settings.telemetryWindow ?? 120} onChange={(telemetryWindow) => onChange({ telemetryWindow })}>{[60, 120, 300].map((value) => <option key={value} value={value}>最近 {value / 60} 分钟</option>)}</SelectField>
       </section>
     </div>

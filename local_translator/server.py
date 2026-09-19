@@ -46,6 +46,7 @@ class App:
         self.httpd: ThreadingHTTPServer | None = None
 
     def stop(self) -> None:
+        self.telemetry.stop()
         self.engine.manager.shutdown()
         if self.httpd is not None:
             self.httpd.shutdown()
@@ -110,7 +111,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"status": "ok", "service": "lat-local-translator"})
                 return
             if self.path == "/admin/telemetry":
-                self._json(200, self.app.telemetry.sample())
+                self._json(200, self.app.telemetry.snapshot())
                 return
             if self.path == "/admin/status":
                 self._json(200, {**self.app.engine.manager.status(), "max_input_chars": self.app.settings.max_input_chars})
@@ -134,6 +135,13 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if self.path == "/admin/telemetry":
+                try:
+                    self.app.telemetry.configure(self._read_json().get("interval"))
+                except ValueError as error:
+                    raise TranslationRequestError(str(error)) from error
+                self._json(200, {"status": "configured"})
+                return
             if self.path == "/translate/cancel":
                 job_id = self._read_json().get("job_id")
                 if not isinstance(job_id, str) or not job_id:
@@ -282,11 +290,13 @@ def serve(settings: Settings) -> None:
     httpd = ThreadingHTTPServer((settings.host, settings.port), RequestHandler)
     httpd.app = app  # type: ignore[attr-defined]
     app.httpd = httpd
+    app.telemetry.start()
     LOGGER.info("translator listening on http://%s:%s", settings.host, settings.port)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         LOGGER.info("received Ctrl+C")
     finally:
+        app.telemetry.stop()
         httpd.server_close()
         app.engine.manager.shutdown()

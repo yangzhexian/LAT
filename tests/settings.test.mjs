@@ -34,10 +34,16 @@ test('settings capsules update preferences and reduced motion survives remount',
       select.value = '100'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     });
     assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).historyLimit, 100);
+    await React.act(async () => {
+      const select = [...document.querySelectorAll('select')].find((item) => item.closest('label').textContent.includes('刷新间隔'));
+      select.value = '0.5'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    });
+    assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).telemetryInterval, 0.5);
     await React.act(async () => root.unmount());
     root = createRoot(document.getElementById('root'));
     await React.act(async () => root.render(React.createElement(Harness)));
     assert.equal(document.querySelector('[aria-label="减少动态效果"]').checked, true);
     assert.equal(document.querySelectorAll('[aria-pressed="true"]').length, 2);
+    assert.equal([...document.querySelectorAll('select')].find((item) => item.closest('label').textContent.includes('刷新间隔')).value, '0.5');
   } finally { await React.act(async () => root.unmount()); dom.window.close(); }
 });

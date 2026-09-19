@@ -228,6 +228,11 @@ export async function translateStream(
   if (!completed) throw new Error("翻译流提前结束，未收到完成确认");
 }
 
-export function getTelemetry(signal?: AbortSignal): Promise<import("../types").TelemetrySample> {
+export function getTelemetry(signal?: AbortSignal): Promise<import("../types").TelemetrySnapshot> {
   return request("/admin/telemetry", { signal });
+}
+
+export function setTelemetryInterval(interval: number, signal?: AbortSignal): Promise<unknown> {
+  return request("/admin/telemetry", { method: "POST", signal,
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ interval }) });
 }

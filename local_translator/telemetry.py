@@ -1,6 +1,7 @@
 """Bounded, cached local NVIDIA telemetry. Values describe whole GPUs."""
 from __future__ import annotations
 
+from collections import deque
 import csv
 import math
 import subprocess
@@ -22,10 +23,61 @@ class GpuTelemetry:
         self._lock = threading.Lock()
         self._updated = float('-inf')
         self._sample: dict[str, Any] = {}
+        self._history: deque[dict[str, Any]] = deque(maxlen=601)
+        self._state_lock = threading.Lock()
+        self._interval = 2.0
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
 
-    def sample(self) -> dict[str, Any]:
+    def configure(self, interval: float) -> None:
+        if isinstance(interval, bool) or interval not in (0.5, 1, 2, 5):
+            raise ValueError("刷新间隔必须为 0.5、1、2 或 5 秒")
+        with self._state_lock:
+            self._interval = float(interval)
+        self._wake.set()
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._collect, name="lat-gpu-telemetry", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3)
+
+    def _record(self, sample: dict[str, Any]) -> None:
+        with self._state_lock:
+            if not self._history or sample["timestamp"] > self._history[-1]["timestamp"]:
+                self._history.append(sample)
+            cutoff = sample["timestamp"] - 300
+            while self._history and self._history[0]["timestamp"] < cutoff:
+                self._history.popleft()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._state_lock:
+            cutoff = time.time() - 300
+            samples = [sample for sample in self._history if sample["timestamp"] >= cutoff]
+            latest = samples[-1] if samples else {"timestamp": time.time(), "gpus": [], "message": "正在读取显卡…"}
+            return {**latest, "samples": samples, "interval": self._interval}
+
+    def _collect(self) -> None:
+        while not self._stop.is_set():
+            self._wake.clear()
+            started = time.monotonic()
+            self._record(self.sample(force=True))
+            with self._state_lock:
+                interval = self._interval
+            self._wake.wait(max(0.01, interval - (time.monotonic() - started)))
+
+
+    def sample(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
-            if time.monotonic() - self._updated < 1:
+            if not force and time.monotonic() - self._updated < 0.4:
                 return self._sample
             gpus = []
             message = ""
