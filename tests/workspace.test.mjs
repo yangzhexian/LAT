@@ -92,5 +92,18 @@ test('workspace retains text across navigation, disables conflicts while transla
     assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '你好，世界。');
     assert.equal(document.querySelector('.translate-button').disabled, true);
     assert.equal(disabled, 0);
+    window.confirm = () => false;
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, selectionTransfer: { id: 1, text: 'Do not overwrite' } })));
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, 'Hello world.');
+    window.confirm = () => true;
+    const fullSelection = 'A'.repeat(16001);
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, settings: { ...props.settings, selectionTargetLanguage: 'zh' }, selectionTransfer: { id: 2, text: fullSelection } })));
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSelection, 'transfer preserves all text');
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '');
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, selectionTransfer: { id: 3 } })));
+    assert.ok(document.querySelector('.model-page'), 'no-text transfer opens model panel');
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSelection);
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, selectionBusy: true })));
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, true);
   } finally { await React.act(async () => root.unmount()); globalThis.fetch = originalFetch; dom.window.close(); }
 });
