@@ -15,7 +15,7 @@ from typing import Any, Iterator
 from .catalog import MODEL_VARIANTS, RUNTIME_ASSETS, DownloadAsset, ModelVariant, get_model_variant
 from .config import Settings
 from .downloader import AssetDownloader
-from .errors import DownloadCancelled, LlamaError
+from .errors import DownloadCancelled, LlamaError, ModelNotReadyError
 from .llama_client import LlamaServerClient
 from .version import __version__
 
@@ -225,6 +225,14 @@ class LlamaCppProcessManager:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
             return int(sock.getsockname()[1])
+
+    def require_ready_server(self) -> LlamaServerClient:
+        """Return the active client without downloading or launching a model."""
+        process = self.owned_process
+        client = self.client
+        if process is None or process.poll() is not None or client is None or not client.is_ready():
+            raise ModelNotReadyError("模型尚未启用或正在准备，请先在主窗口启用模型")
+        return client
 
     def ensure_server(self) -> LlamaServerClient:
         if (

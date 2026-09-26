@@ -1,11 +1,14 @@
 import json
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import Mock, patch
 
 from local_translator.config import Settings
+from local_translator.engine import TranslationRequestError
+from local_translator.errors import ModelNotReadyError
 from local_translator.server import App, RequestHandler
 
 
@@ -42,6 +45,65 @@ class ServerTests(unittest.TestCase):
         with urllib.request.urlopen(request) as response:
             body = json.loads(response.read().decode())
         self.assertEqual(body["choices"][0]["message"]["content"], "Hello")
+
+    def test_translation_success_response_remains_compatible(self):
+        request = urllib.request.Request(self.url + "/translate",
+            data=json.dumps({"text": "你好"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(json.loads(response.read()), {
+                "translation": "Hello", "model": "hy-mt2-7b:q6_k", "quality_issues": [], "metrics": None,
+            })
+
+    def test_json_error_codes_preserve_legacy_status_and_type(self):
+        cases = [
+            (TranslationRequestError("busy message", "translation_busy"), 400, "invalid_request_error", "translation_busy"),
+            (ModelNotReadyError("not enabled"), 503, "llama_runtime_error", "model_not_ready"),
+        ]
+        for route in ("/translate", "/v1/chat/completions"):
+            for error, status, error_type, code in cases:
+                with self.subTest(route=route, code=code):
+                    self.httpd.app.engine.translate.side_effect = error
+                    request = urllib.request.Request(self.url + route,
+                        data=json.dumps({"text": "你好"}).encode(),
+                        headers={"Content-Type": "application/json"}, method="POST")
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        urllib.request.urlopen(request)
+                    with raised.exception as response:
+                        self.assertEqual(response.code, status)
+                        self.assertEqual(json.loads(response.read()), {
+                            "error": {"message": str(error), "type": error_type, "code": code},
+                        })
+
+    def test_stream_readiness_error_is_coded_without_loading(self):
+        manager = self.httpd.app.engine.manager
+        manager.require_ready_server = Mock(side_effect=ModelNotReadyError("not enabled"))
+        manager.ensure_server = Mock()
+        request = urllib.request.Request(self.url + "/translate/stream",
+            data=json.dumps({"text": "你好", "require_ready": True}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.status, 200)
+            events = [json.loads(line[6:]) for line in response.read().decode().splitlines() if line.startswith("data: ")]
+        self.assertEqual(events, [{"type": "error", "message": "not enabled", "code": "model_not_ready"}])
+        manager.ensure_server.assert_not_called()
+
+    def test_stream_busy_error_does_not_cancel_existing_job(self):
+        engine = self.httpd.app.engine
+        active = engine.translate_stream({"text": "你好", "target_language": "English"})
+        plan = next(active)
+        try:
+            request = urllib.request.Request(self.url + "/translate/stream",
+                data=json.dumps({"text": "新请求", "require_ready": True}).encode(),
+                headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(request) as response:
+                events = [json.loads(line[6:]) for line in response.read().decode().splitlines() if line.startswith("data: ")]
+            self.assertEqual(events[0]["type"], "error")
+            self.assertEqual(events[0]["code"], "translation_busy")
+            self.assertFalse(engine._jobs[plan["job_id"]].cancel.is_set())
+            self.assertEqual(engine._active_job.id, plan["job_id"])
+        finally:
+            active.close()
 
     def test_telemetry_endpoint(self):
         sample = {"timestamp": 1, "gpus": [{"id": "gpu", "power_w": None}], "message": ""}

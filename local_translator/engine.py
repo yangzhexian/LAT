@@ -20,11 +20,15 @@ from .segments import split_source, token_cost
 
 
 class TranslationRequestError(ValueError):
-    pass
+    def __init__(self, message: str, code: str = "invalid_request"):
+        super().__init__(message)
+        self.code = code
 
 
 class TranslationOutputError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: str = "model_output_error"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -100,7 +104,7 @@ class TranslationEngine:
     def cancel_translation(self, job_id: str) -> None:
         job = self._jobs.get(job_id)
         if job is None:
-            raise TranslationRequestError("checkpoint_expired: 翻译断点已过期，请重新翻译")
+            raise TranslationRequestError("checkpoint_expired: 翻译断点已过期，请重新翻译", "checkpoint_expired")
         job.cancel.set()
 
     def translate_stream(self, body: dict[str, Any]):
@@ -109,9 +113,9 @@ class TranslationEngine:
         while not self._translation_lock.acquire(blocking=False):
             active = self._active_job
             if not (resume_id and active and active.id == resume_id and active.cancel.is_set()):
-                raise TranslationRequestError("translation_busy: 模型正在处理另一个翻译任务，请稍后重试")
+                raise TranslationRequestError("translation_busy: 模型正在处理另一个翻译任务，请稍后重试", "translation_busy")
             if time.monotonic() - waiting_since > 30:
-                raise TranslationRequestError("translation_busy: 上次取消仍在处理中，断点已保留，请稍后继续")
+                raise TranslationRequestError("translation_busy: 上次取消仍在处理中，断点已保留，请稍后继续", "translation_busy")
             yield {"type": "waiting", "job_id": resume_id, "message": "等待上次推理停止，随后从断点继续…"}
             time.sleep(0.1)
         try:
@@ -139,17 +143,17 @@ class TranslationEngine:
         resume_id = body.get("job_id")
         if resume_id is not None:
             if not isinstance(resume_id, str) or resume_id not in self._jobs:
-                raise TranslationRequestError("checkpoint_expired: 翻译断点已过期，请选择重新翻译")
+                raise TranslationRequestError("checkpoint_expired: 翻译断点已过期，请选择重新翻译", "checkpoint_expired")
             job = self._jobs[resume_id]
             if job.fingerprint != fingerprint:
-                raise TranslationRequestError("checkpoint_mismatch: 原文、语言、模型或推理配置已改变，请重新翻译")
+                raise TranslationRequestError("checkpoint_mismatch: 原文、语言、模型或推理配置已改变，请重新翻译", "checkpoint_mismatch")
             job.cancel.clear()
             job.updated_at = now
             return job
         overhead = token_cost(build_translation_prompt(request, "")) + 256
         budget = min(1200, (self.settings.num_ctx - overhead) // 3, self.settings.max_output_tokens // 2)
         if budget < 64:
-            raise TranslationRequestError("context_budget: 上下文或输出预算太小，请增加 num_ctx / max_output_tokens")
+            raise TranslationRequestError("context_budget: 上下文或输出预算太小，请增加 num_ctx / max_output_tokens", "context_budget")
         while len(self._jobs) >= 8:
             oldest = min(self._jobs, key=lambda key: self._jobs[key].updated_at)
             del self._jobs[oldest]
@@ -159,6 +163,13 @@ class TranslationEngine:
         return job
 
     def _translate_document(self, body: dict[str, Any]):
+        require_ready = body.get("require_ready", False)
+        if not isinstance(require_ready, bool):
+            raise TranslationRequestError("require_ready 必须是布尔值")
+        if require_ready:
+            # Check before publishing a plan, including formula-only documents.
+            # Later segments check again so unloading never silently reloads it.
+            self.manager.require_ready_server()
         job = self._get_job(body)
         self._active_job = job
         started = time.perf_counter()
@@ -225,7 +236,10 @@ class TranslationEngine:
                             job.queue[index:index + 1] = [(item, depth + 1) for item in smaller]
                             yield {"type": "retry", **job.progress(), "chunk_index": index + 1, "issues": ["segment_subdivided"]}
                             continue
-                    raise TranslationOutputError(f"第 {index + 1}/{len(job.queue)} 段失败；已保留 {index} 段，可重试剩余分段。原因: {message}") from error
+                    raise TranslationOutputError(
+                        f"第 {index + 1}/{len(job.queue)} 段失败；已保留 {index} 段，可重试剩余分段。原因: {message}",
+                        error.code,
+                    ) from error
                 if job.cancel.is_set():
                     raise TranslationCancelled()
                 translated = prefix + segment_result["translation"] + suffix if content else part
@@ -267,7 +281,7 @@ class TranslationEngine:
 
         protected = protect_text(request.source_text)
         prompt = build_translation_prompt(request, protected.protected)
-        client = self.manager.ensure_server()
+        client = self.manager.require_ready_server() if body.get("require_ready") is True else self.manager.ensure_server()
         model = client.resolve_model()
         attempts = 2 if self.settings.retry_on_bad_output else 1
         for attempt in range(attempts):

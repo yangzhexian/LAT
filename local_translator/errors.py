@@ -1,6 +1,14 @@
 class LlamaError(RuntimeError):
     """Base error for the managed llama.cpp runtime."""
 
+    code = "llama_runtime_error"
+
+
+class ModelNotReadyError(LlamaError):
+    """An explicitly ready-only request must not start the model itself."""
+
+    code = "model_not_ready"
+
 
 class DownloadCancelled(LlamaError):
     """Raised when a runtime or model download is cancelled by the user."""

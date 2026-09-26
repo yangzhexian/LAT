@@ -198,11 +198,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             self._chat_completion(body, result.text, result.model)
         except TranslationRequestError as error:
-            self._json(400, {"error": {"message": str(error), "type": "invalid_request_error"}})
+            self._json(400, {"error": {"message": str(error), "type": "invalid_request_error", "code": error.code}})
         except TranslationOutputError as error:
-            self._json(502, {"error": {"message": str(error), "type": "model_output_error"}})
+            self._json(502, {"error": {"message": str(error), "type": "model_output_error", "code": error.code}})
         except LlamaError as error:
-            self._json(503, {"error": {"message": str(error), "type": "llama_runtime_error"}})
+            self._json(503, {"error": {"message": str(error), "type": "llama_runtime_error", "code": error.code}})
         except Exception as error:
             LOGGER.exception("request failed")
             self._json(500, {"error": {"message": str(error), "type": "internal_error"}})
@@ -253,7 +253,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
         except (TranslationRequestError, TranslationOutputError, LlamaError) as error:
             try:
-                self.wfile.write(f"data: {json.dumps({'type': 'error', 'message': str(error)}, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.write(f"data: {json.dumps({'type': 'error', 'message': str(error), 'code': error.code}, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass

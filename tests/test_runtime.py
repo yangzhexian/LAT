@@ -3,11 +3,11 @@ import tempfile
 import urllib.error
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from local_translator.catalog import DownloadAsset, get_model_variant
 from local_translator.config import Settings
-from local_translator.errors import LlamaError
+from local_translator.errors import LlamaError, ModelNotReadyError
 from local_translator.runtime import LlamaCppProcessManager
 
 
@@ -33,6 +33,24 @@ class FakeResponse:
 
 
 class RuntimeDownloadTests(unittest.TestCase):
+    def test_ready_only_requires_live_process_and_healthy_client(self):
+        manager = LlamaCppProcessManager(Settings())
+        manager.ensure_server = Mock()
+        with self.assertRaises(ModelNotReadyError):
+            manager.require_ready_server()
+        manager.owned_process = Mock()
+        manager.owned_process.poll.return_value = None
+        manager.client = Mock()
+        manager.client.is_ready.return_value = False
+        with self.assertRaises(ModelNotReadyError):
+            manager.require_ready_server()
+        manager.client.is_ready.return_value = True
+        self.assertIs(manager.require_ready_server(), manager.client)
+        manager.owned_process.poll.return_value = 1
+        with self.assertRaises(ModelNotReadyError):
+            manager.require_ready_server()
+        manager.ensure_server.assert_not_called()
+
     def test_model_download_prefers_hy_mt2_mirror(self):
         assets = get_model_variant().assets
 
