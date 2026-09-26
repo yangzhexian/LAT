@@ -109,8 +109,8 @@ export async function ensureGateway(): Promise<void> {
   throw new Error(lastError);
 }
 
-export function getStatus(): Promise<LocalStatus> {
-  return request<LocalStatus>("/admin/status");
+export function getStatus(signal?: AbortSignal): Promise<LocalStatus> {
+  return request<LocalStatus>("/admin/status", { signal });
 }
 
 export function getDownloadEnvironment(model?: string): Promise<DownloadEnvironment> {

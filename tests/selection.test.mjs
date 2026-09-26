@@ -89,10 +89,12 @@ test('dismissal cancels only the popup job and ignores all late output and histo
 
 test('pending status is invalidated on dispose, and out-of-order snapshots cannot replace current selection', async () => {
   const status = deferred();
-  const h = harness({ status: () => status.promise });
+  let statusSignal;
+  const h = harness({ status: (signal) => { statusSignal = signal; return status.promise; } });
   h.controller.accept({ requestId: '100', text: 'Pending' }, 'zh');
   await tick();
   h.controller.dispose();
+  assert.equal(statusSignal.aborted, true, 'dismissal must abort the pending status network request');
   status.resolve(ready);
   await tick();
   assert.equal(h.requests.length, 0);

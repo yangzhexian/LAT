@@ -21,7 +21,7 @@ export const EMPTY_SELECTION_VIEW: SelectionView = {
 };
 
 interface Dependencies {
-  status: () => Promise<LocalStatus>;
+  status: (signal: AbortSignal) => Promise<LocalStatus>;
   translate: (body: TranslationRequest, onEvent: (event: StreamEvent) => void, signal: AbortSignal) => Promise<void>;
   cancel: (id: string) => Promise<unknown>;
   busy: (busy: boolean) => Promise<unknown>;
@@ -90,8 +90,11 @@ export class SelectionController {
     try {
       await this.deps.busy(true);
       if (!live()) return;
-      const status = await Promise.race([this.deps.status(), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("本地网关未响应，请稍后重试")), 6000);
+      const status = await Promise.race([this.deps.status(abort.signal), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          abort.abort();
+          reject(new Error("本地网关未响应，请稍后重试"));
+        }, 6000);
       })]);
       clearTimeout(timer);
       if (!live()) return;
