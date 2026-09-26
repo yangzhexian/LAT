@@ -13,7 +13,15 @@ const GATEWAY_URL = (
 interface ErrorResponse {
   error?: {
     message?: string;
+    code?: string;
   };
+}
+
+export class GatewayError extends Error {
+  constructor(message: string, public readonly code?: string) {
+    super(message);
+    this.name = "GatewayError";
+  }
 }
 
 function isTauri(): boolean {
@@ -27,7 +35,7 @@ async function invokeTauri<T>(command: string): Promise<T> {
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const body = (await response.json().catch(() => ({}))) as ErrorResponse;
-  return new Error(body.error?.message || fallback + " (" + response.status + ")");
+  return new GatewayError(body.error?.message || fallback + " (" + response.status + ")", body.error?.code);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -219,12 +227,13 @@ export async function translateStream(
   }
   let completed = false;
   let streamError = "";
+  let streamCode: string | undefined;
   await readEventStream<StreamEvent>(response, (event) => {
     if (event.type === "complete" || event.type === "cancelled") completed = true;
-    if (event.type === "error") streamError = event.message || "翻译失败";
+    if (event.type === "error") { streamError = event.message || "翻译失败"; streamCode = event.code; }
     onEvent(event);
   });
-  if (streamError) throw new Error(streamError);
+  if (streamError) throw new GatewayError(streamError, streamCode);
   if (!completed) throw new Error("翻译流提前结束，未收到完成确认");
 }
 

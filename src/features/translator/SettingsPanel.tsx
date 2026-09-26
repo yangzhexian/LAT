@@ -1,14 +1,18 @@
 import type { UserSettings } from "../../types";
 import { Button, OptionGroup, SelectField, Switch } from "../../components/Controls";
 import { Icon } from "../../components/Icon";
+import { ShortcutField } from "../../components/ShortcutField";
+import { LANGUAGES } from "../../lib/languages";
 
 interface SettingsPanelProps {
   settings: UserSettings;
   onChange: (next: Partial<UserSettings>) => void;
   onClose: () => void;
+  selectionError?: string;
+  selectionPaused?: boolean;
 }
 
-export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ settings, onChange, onClose, selectionError, selectionPaused }: SettingsPanelProps) {
   function changeHistoryLimit(value: number) {
     if (value < (settings.historyLimit ?? 30) && !window.confirm(`改为 ${value} 条后，超出的旧记录将被删除。继续？`)) return;
     onChange({ historyLimit: value });
@@ -19,6 +23,16 @@ export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProp
       <Button className="icon-button" onClick={onClose} aria-label="关闭设置"><Icon name="close" /></Button>
     </header>
     <div className="settings-grid">
+      <section className="settings-section selection-settings"><h3>划词翻译</h3><p>在其他软件选中文字，点击浮标或按快捷键翻译</p>
+        <Switch label="启用划词翻译" hint="仅 Windows 桌面版；点击浮标后才调用本地模型" checked={settings.selectionEnabled ?? false}
+          onChange={(selectionEnabled) => onChange({ selectionEnabled, ...(selectionEnabled && !settings.selectionOnboarded ? { selectionCloseToTray: true, selectionOnboarded: true } : {}) })} />
+        <ShortcutField value={settings.selectionShortcut || "Ctrl+Alt+T"} onChange={(selectionShortcut) => onChange({ selectionShortcut })} />
+        <Switch label="允许复制兜底" hint="直接取词失败时，主动触发翻译才模拟复制；复杂剪贴板会提示手动粘贴" checked={settings.selectionClipboardFallback ?? true} onChange={(selectionClipboardFallback) => onChange({ selectionClipboardFallback })} />
+        <Switch label="关闭到托盘" hint="关闭主窗口后保留本地模型；在托盘菜单中退出可释放显存" checked={settings.selectionCloseToTray ?? false} onChange={(selectionCloseToTray) => onChange({ selectionCloseToTray })} />
+        <label className="setting-select"><span>划词目标语言<small>原文自动检测，独立于主窗口</small></span><select value={settings.selectionTargetLanguage || "zh"} onChange={(event) => onChange({ selectionTargetLanguage: event.target.value })}>{LANGUAGES.filter((item) => item.code !== "auto").map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label>
+        {selectionPaused && <p className="settings-note" role="status">划词监听已从托盘暂停，可在托盘菜单中恢复。</p>}
+        {selectionError && <p className="settings-note selection-error" role="alert">{selectionError}</p>}
+      </section>
       <section className="settings-section"><h3>主题</h3><p>选择工作区的明暗外观</p>
         <OptionGroup label="主题" value={settings.theme} onChange={(theme) => onChange({ theme })} options={[{ value: 'light', label: '浅色', icon: 'sun' }, { value: 'dark', label: '深色', icon: 'moon' }]} />
       </section>

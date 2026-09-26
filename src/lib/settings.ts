@@ -1,5 +1,6 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { UserSettings } from "../types";
+import { LANGUAGES } from "./languages";
 
 const SETTINGS_KEY = "lat.settings.v1";
 const DEFAULT_SETTINGS: UserSettings = {
@@ -13,6 +14,12 @@ const DEFAULT_SETTINGS: UserSettings = {
   autoFont: true,
   removeLineBreaks: false,
   dataDirectory: "",
+  selectionEnabled: false,
+  selectionShortcut: "Ctrl+Alt+T",
+  selectionClipboardFallback: true,
+  selectionCloseToTray: false,
+  selectionTargetLanguage: "zh",
+  selectionOnboarded: false,
 };
 
 function readSettings(): UserSettings {
@@ -23,6 +30,11 @@ function readSettings(): UserSettings {
       if (!values.includes(settings[key])) settings[key] = DEFAULT_SETTINGS[key as keyof UserSettings];
     }
     if (typeof settings.saveHistory !== "boolean") settings.saveHistory = true;
+    for (const key of ["selectionEnabled", "selectionClipboardFallback", "selectionCloseToTray", "selectionOnboarded"] as const) {
+      if (typeof settings[key] !== "boolean") settings[key] = DEFAULT_SETTINGS[key];
+    }
+    if (typeof settings.selectionShortcut !== "string" || !settings.selectionShortcut.trim()) settings.selectionShortcut = DEFAULT_SETTINGS.selectionShortcut;
+    if (!LANGUAGES.some((language) => language.code !== "auto" && language.code === settings.selectionTargetLanguage)) settings.selectionTargetLanguage = "zh";
     return settings;
   } catch {
     return DEFAULT_SETTINGS;

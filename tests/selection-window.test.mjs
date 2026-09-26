@@ -1,0 +1,94 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { build } from 'esbuild';
+import { JSDOM } from 'jsdom';
+import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+
+test('popup listens before handshake, waits for remembered target, and cleans up StrictMode listeners', async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost/?window=selection' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  window.__TAURI_INTERNALS__ = {};
+  const listeners = new Map();
+  const calls = [];
+  const emitted = [];
+  let configResolve;
+  let snapshotResolve;
+  let streamController;
+  const configRead = new Promise((resolve) => { configResolve = resolve; });
+  const snapshotRead = new Promise((resolve) => { snapshotResolve = resolve; });
+  globalThis.__selectionTest = {
+    async invoke(command, args) {
+      calls.push({ command, args });
+      if (command === 'selection_get_config') return configRead;
+      if (command === 'selection_snapshot') return snapshotRead;
+      return undefined;
+    },
+    async listen(event, callback) {
+      const set = listeners.get(event) || new Set();
+      set.add(callback);
+      listeners.set(event, set);
+      return () => set.delete(callback);
+    },
+    async emitTo(target, event, payload) { emitted.push({ target, event, payload }); },
+  };
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    if (url.endsWith('/admin/status')) return Response.json({ ready: true, model_configured: 'model', backend: 'llama.cpp' });
+    if (url.endsWith('/translate/cancel')) return Response.json({ status: 'cancelling' });
+    requests.push(JSON.parse(init.body));
+    return new Response(new ReadableStream({ start(controller) {
+      streamController = controller;
+      init.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true });
+    } }));
+  };
+  await build({ entryPoints: ['src/features/selection/SelectionWindow.tsx'], outfile: 'artifacts/validation/selection-window-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' }, plugins: [{ name: 'native-selection-test', setup(build) {
+    build.onResolve({ filter: /^@tauri-apps\/api\/(core|event)$/ }, ({ path }) => ({ path, namespace: 'mock' }));
+    build.onLoad({ filter: /.*/, namespace: 'mock' }, ({ path }) => ({ contents: path.endsWith('/core')
+      ? 'export const invoke = (...args) => globalThis.__selectionTest.invoke(...args);'
+      : 'export const listen = (...args) => globalThis.__selectionTest.listen(...args); export const emitTo = (...args) => globalThis.__selectionTest.emitTo(...args);' }));
+    build.onResolve({ filter: /^better-react-mathjax$/ }, () => ({ path: 'mathjax', namespace: 'math' }));
+    build.onLoad({ filter: /.*/, namespace: 'math' }, () => ({ contents: 'export const MathJaxContext = ({children}) => children; export const MathJax = ({children}) => children;' }));
+  } }] });
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { SelectionWindow } = await import(pathToFileURL(resolve('artifacts/validation/selection-window-test.mjs')).href);
+  const root = createRoot(document.getElementById('root'));
+  const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const event = async (name, payload) => React.act(async () => {
+    for (const callback of listeners.get(name) || []) callback({ payload });
+    await wait();
+  });
+  try {
+    await React.act(async () => { root.render(React.createElement(React.StrictMode, null, React.createElement(SelectionWindow))); await wait(); });
+    assert.equal(listeners.get('selection-ready').size, 1);
+    assert.equal(listeners.get('selection-dismissed').size, 1);
+    await event('selection-ready', { requestId: '102', text: 'Bonjour' });
+    assert.equal(requests.length, 0, 'selection must not translate with default language while config is pending');
+    await React.act(async () => {
+      configResolve({ enabled: true, shortcut: 'Ctrl+Alt+T', clipboardFallback: true, closeToTray: true, theme: 'dark', reduceMotion: true, targetLanguage: 'en' });
+      await wait();
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].target_language, 'English');
+    assert.equal(requests[0].require_ready, true);
+    assert.equal(document.documentElement.dataset.theme, 'dark');
+    await React.act(async () => { snapshotResolve({ requestId: '101', text: 'Old source' }); await wait(); });
+    assert.match(document.querySelector('.selection-source-toggle').textContent, /7 字符/);
+    await React.act(async () => {
+      streamController.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'plan', job_id: 'only-this-job' }) + '\n\n'));
+      await wait();
+    });
+    await event('selection-dismissed');
+    assert.equal(document.querySelector('textarea').value, '');
+    assert.equal(emitted.filter(({ event }) => event === 'selection-history').length, 0);
+    await React.act(async () => root.unmount());
+    for (const set of listeners.values()) assert.equal(set.size, 0);
+  } finally {
+    await React.act(async () => root.unmount());
+    globalThis.fetch = originalFetch;
+    delete globalThis.__selectionTest;
+    dom.window.close();
+  }
+});

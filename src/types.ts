@@ -13,6 +13,12 @@ export interface UserSettings {
   autoFont: boolean;
   removeLineBreaks: boolean;
   dataDirectory: string;
+  selectionEnabled: boolean;
+  selectionShortcut: string;
+  selectionClipboardFallback: boolean;
+  selectionCloseToTray: boolean;
+  selectionTargetLanguage: string;
+  selectionOnboarded: boolean;
 }
 
 export interface ModelDetails {
@@ -137,6 +143,7 @@ export interface TranslationMetrics {
 }
 
 export interface TranslationRequest {
+  require_ready?: boolean;
   job_id?: string;
   text: string;
   source_language: string;
@@ -145,6 +152,7 @@ export interface TranslationRequest {
 }
 
 export interface StreamEvent {
+  code?: string;
   job_id?: string;
   type: "waiting" | "cancelled" | "plan" | "segment_complete" | "attempt" | "progress" | "retry" | "complete" | "error";
   chunk_index?: number;

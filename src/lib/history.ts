@@ -1,4 +1,5 @@
 export interface TranslationHistory {
+  origin?: "workspace" | "selection";
   id: string;
   createdAt: number;
   source: string;

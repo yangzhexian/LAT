@@ -14,6 +14,7 @@ import { readHistory, updateHistory, type TranslationHistory } from "../../lib/h
 import { Icon, type IconName } from "../../components/Icon";
 import { SettingsPanel } from "./SettingsPanel";
 import { TextPane } from "./TextPane";
+import type { SelectionTransfer } from "../../lib/selectionIntegration";
 
 interface TranslatorWorkspaceProps {
   status: LocalStatus;
@@ -23,6 +24,10 @@ interface TranslatorWorkspaceProps {
   modelBusy?: boolean;
   setupContent?: ReactNode;
   modelError?: string;
+  selectionTransfer?: SelectionTransfer | null;
+  selectionError?: string;
+  selectionPaused?: boolean;
+  selectionBusy?: boolean;
 }
 
 function autoFontSize(value: string, enabled: boolean): number {
@@ -49,6 +54,10 @@ export function TranslatorWorkspace({
   modelBusy = false,
   setupContent,
   modelError,
+  selectionTransfer,
+  selectionError,
+  selectionPaused,
+  selectionBusy = false,
 }: TranslatorWorkspaceProps) {
   const [sourceLanguage, setSourceLanguage] = useState("zh");
   const [targetLanguage, setTargetLanguage] = useState("en");
@@ -89,6 +98,11 @@ export function TranslatorWorkspace({
   }
   useEffect(() => { if (page === "history") void refreshHistory(); }, [page]);
   useEffect(() => {
+    const refresh = () => { void refreshHistory(); };
+    window.addEventListener("lat-history-changed", refresh);
+    return () => window.removeEventListener("lat-history-changed", refresh);
+  }, []);
+  useEffect(() => {
     void updateHistory({ trim: true }, settings.historyLimit ?? 30).then(refreshHistory).catch(() => setHistoryError("历史上限应用失败"));
   }, [settings.historyLimit]);
   async function removeHistory(id?: string) {
@@ -106,6 +120,19 @@ export function TranslatorWorkspace({
   const [metrics, setMetrics] = useState<TranslationMetrics | null>(null);
 
   const [message, setMessage] = useState("准备就绪");
+  const handledTransfer = useRef<number | null>(null);
+  useEffect(() => {
+    if (!selectionTransfer || handledTransfer.current === selectionTransfer.id) return;
+    handledTransfer.current = selectionTransfer.id;
+    if (selectionTransfer.text === undefined) { setPage("model"); return; }
+    if (busyRef.current || modelBusy) { setMessage("当前任务仍在进行，请完成后再次转入划词内容"); return; }
+    if ((source || translation) && !window.confirm("用划词内容替换当前工作区？当前原文和译文将被替换。")) return;
+    clearCheckpoint();
+    setSource(selectionTransfer.text); setTranslation("");
+    setSourceLanguage("auto"); setTargetLanguage(settings.selectionTargetLanguage || "zh");
+    setMetrics(null); setProgress(null); setPage("translate"); setMessage("已转入划词内容，可开始翻译");
+    if (window.__TAURI_INTERNALS__) void import("@tauri-apps/api/core").then(({ invoke }) => invoke("selection_dismiss")).catch(() => {});
+  }, [selectionTransfer]);
 
   const sourceFontSize = autoFontSize(source, settings.autoFont);
   const targetFontSize = autoFontSize(translation, settings.autoFont);
@@ -124,7 +151,7 @@ export function TranslatorWorkspace({
   }
 
   async function translate(restart = false) {
-    if (!source.trim() || busyRef.current || !status.ready || modelBusy || sourceChars > inputLimit) return;
+    if (!source.trim() || busyRef.current || !status.ready || modelBusy || selectionBusy || sourceChars > inputLimit) return;
     busyRef.current = true;
     controller.current = new AbortController();
     setBusy(true);
@@ -211,7 +238,7 @@ export function TranslatorWorkspace({
         </div>
         <div className="header-action">{page === "history" ?
           <DangerButton disabled={!history.length} onClick={() => { if (window.confirm("清空全部翻译历史？此操作无法撤销。")) void removeHistory(); }}>清空历史</DangerButton> :
-          <DangerButton disabled={busy || modelBusy || !status.ready} onClick={onDisable}>{modelBusy ? "正在关闭…" : "关闭模型"}</DangerButton>}
+          <DangerButton disabled={busy || modelBusy || selectionBusy || !status.ready} onClick={onDisable}>{modelBusy ? "正在关闭…" : selectionBusy ? "划词翻译中" : "关闭模型"}</DangerButton>}
         </div>
       </header>
       {modelError && <div className="model-error" role="alert">{modelError}</div>}
@@ -269,7 +296,7 @@ export function TranslatorWorkspace({
         <Button
           type="button"
           className="primary-button translate-button"
-          disabled={busy || modelBusy || !status.ready || !source.trim() || sourceChars > inputLimit}
+          disabled={busy || modelBusy || selectionBusy || !status.ready || !source.trim() || sourceChars > inputLimit}
           onClick={() => void translate()}
         >
           {busy ? "翻译中…" : canResume ? "继续翻译" : "开始翻译"}
@@ -277,13 +304,13 @@ export function TranslatorWorkspace({
         </Button>
       </footer>
       </div>
-      {page === "settings" && <SettingsPanel settings={settings} onChange={onSettingsChange} onClose={() => setPage("translate")} />}
+      {page === "settings" && <SettingsPanel settings={settings} onChange={onSettingsChange} onClose={() => setPage("translate")} selectionError={selectionError} selectionPaused={selectionPaused} />}
       {page === "history" && <section className="history-page">
         <p className="history-description">仅保存在本机 · 最近 {settings.historyLimit ?? 30} 条{settings.saveHistory === false ? " · 已暂停保存新记录" : ""}</p>
         {historyError && <p role="alert">{historyError}</p>}
         {!history.length && <p className="empty-hint">完成翻译后，记录会出现在这里。</p>}
         <div className="history-grid">{history.map((row) => <article className="history-card" key={row.id}>
-          <div className="history-meta">{new Date(row.createdAt).toLocaleString()} · {row.sourceLanguage} → {row.targetLanguage} · {row.model}</div>
+          <div className="history-meta">{row.origin === "selection" ? "划词翻译 · " : ""}{new Date(row.createdAt).toLocaleString()} · {row.sourceLanguage} → {row.targetLanguage} · {row.model}</div>
           <p className="history-excerpt">{row.source.slice(0, 180)}{row.source.length > 180 ? "…" : ""}</p>
           <details><summary>查看完整记录</summary><div className="history-comparison"><section><h3>原文 · {languageName(row.sourceLanguage)}</h3><div className="history-text">{row.source}</div></section><section><h3>译文 · {languageName(row.targetLanguage)}</h3><div className="history-text">{row.translation}</div></section></div></details>
           <div className="history-actions"><Button className="secondary-button" disabled={busy} onClick={() => restoreHistory(row)}>恢复到工作区</Button><Button className="mini-button" onClick={() => void removeHistory(row.id)}>删除</Button></div>

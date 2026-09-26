@@ -16,6 +16,8 @@ import {
   unloadModel,
 } from "./lib/api";
 import { usePersistentSettings } from "./lib/settings";
+import { useSelectionIntegration } from "./lib/selectionIntegration";
+import { mathJaxConfig } from "./lib/mathjax";
 import type {
   AppScreen,
   DownloadEvent,
@@ -40,26 +42,13 @@ const EMPTY_DOWNLOAD_STATE: DownloadState = {
   environment: null,
 };
 
-const mathJaxConfig = {
-  loader: { load: ["[tex]/boldsymbol"] },
-  tex: {
-    packages: { "[+]": ["boldsymbol"] },
-    inlineMath: [["$", "$"], ["\\(", "\\)"]],
-    displayMath: [["$$", "$$"], ["\\[", "\\]"]],
-    processEscapes: true,
-  },
-  chtml: { mtextInheritFont: true, fontURL: "/mathjax/output/chtml/fonts/woff-v2" },
-  options: {
-    skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
-  },
-};
-
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>("loading");
   const [status, setStatus] = useState<LocalStatus | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [downloadModel, setDownloadModel] = useState(DEFAULT_DOWNLOAD_MODEL);
   const [settings, setSettings] = usePersistentSettings();
+  const selection = useSelectionIntegration(settings, setSettings);
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -213,7 +202,7 @@ export default function App() {
   }
 
   async function disableModel() {
-    if (modelOperation.current || busy) return;
+    if (modelOperation.current || busy || selection.busy) return;
     modelOperation.current = true;
     setModelTransition("unloading");
     setError("");
@@ -402,7 +391,8 @@ export default function App() {
     <MathJaxContext version={3} config={mathJaxConfig} src="/mathjax/tex-chtml.js">
       {(screen === "loading" || screen === "error") && content}
       {status && <div inert={modelTransition !== null} hidden={screen === "loading" || screen === "error"}>
-        <TranslatorWorkspace status={status} settings={settings} modelBusy={busy}
+        <TranslatorWorkspace status={status} settings={settings} modelBusy={busy} selectionBusy={selection.busy}
+          selectionTransfer={selection.transfer} selectionError={selection.error} selectionPaused={selection.paused}
           setupContent={screen === "select" ? content : null} modelError={error}
           onSettingsChange={(next) => setSettings((current) => ({ ...current, ...next }))}
           onDisable={() => void disableModel()} />

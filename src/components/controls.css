@@ -17,4 +17,9 @@
 .setting-select { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; font-size: 13px; }
 .setting-select small { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.6; }
 .setting-select select { max-width: 50%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer; }
+.shortcut-setting input { width: 180px; max-width: 50%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); text-align: center; }
+.shortcut-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.shortcut-actions button { padding: 8px 12px; font-size: 12px; }
+.selection-settings { grid-column: 1 / -1; }
+.settings-note.selection-error { color: #d64d69; }
 @media (prefers-reduced-motion: reduce) { .switch-track, .switch-track > span { transition: none; } }
