@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "selection",
+  "description": "Selection windows may exchange app events and use their own window controls; no shell access.",
+  "windows": ["selection", "selection-bubble"],
+  "permissions": ["core:event:default", "core:window:allow-start-dragging"]
+}

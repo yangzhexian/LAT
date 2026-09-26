@@ -9,6 +9,8 @@ use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+mod selection;
+
 struct GatewayState(Mutex<Option<CommandChild>>);
 
 fn gateway_response_is_ready(response: &str) -> bool {
@@ -50,8 +52,12 @@ fn request_gateway_shutdown() {
 #[tauri::command]
 fn start_gateway(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     state: tauri::State<'_, GatewayState>,
 ) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("此窗口无权启动翻译网关".into());
+    }
     if gateway_is_ready() {
         return Ok(());
     }
@@ -102,18 +108,39 @@ fn stop_gateway_process(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn stop_gateway(app: tauri::AppHandle) -> Result<(), String> {
+fn stop_gateway(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("此窗口无权停止翻译网关".into());
+    }
     stop_gateway_process(&app);
     Ok(())
 }
 
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            selection::show_main(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(GatewayState(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway])
+        .manage(selection::SelectionState::default())
+        .invoke_handler(tauri::generate_handler![
+            start_gateway,
+            stop_gateway,
+            selection::selection_configure,
+            selection::selection_get_config,
+            selection::selection_snapshot,
+            selection::selection_activate,
+            selection::selection_dismiss,
+            selection::selection_set_busy,
+            selection::selection_set_pinned,
+            selection::selection_open_main,
+            selection::selection_copy,
+        ])
         .setup(|app| {
+            selection::setup(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
             }
@@ -121,10 +148,43 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");
-    app.run(|app, event| {
-        if matches!(event, RunEvent::ExitRequested { .. }) {
+    app.run(|app, event| match event {
+        RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "main" => {
+            if selection::close_to_tray(app) {
+                api.prevent_close();
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            } else {
+                app.exit(0);
+            }
+        }
+        RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "selection" || label == "selection-bubble" => {
+            api.prevent_close();
+            selection::dismiss(app);
+        }
+        RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Focused(false),
+            ..
+        } if label == "selection" => {
+            if !selection::is_pinned(app) {
+                selection::dismiss(app);
+            }
+        }
+        RunEvent::ExitRequested { .. } => {
+            selection::shutdown(app);
             stop_gateway_process(app);
         }
+        _ => {}
     });
 }
 
