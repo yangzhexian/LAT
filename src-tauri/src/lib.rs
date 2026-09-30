@@ -136,6 +136,7 @@ pub fn run() {
             selection::selection_dismiss,
             selection::selection_set_busy,
             selection::selection_set_pinned,
+            selection::selection_start_dragging,
             selection::selection_open_main,
             selection::selection_copy,
         ])
@@ -176,9 +177,7 @@ pub fn run() {
             event: tauri::WindowEvent::Focused(false),
             ..
         } if label == "selection" => {
-            if !selection::is_pinned(app) {
-                selection::dismiss(app);
-            }
+            selection::on_focus_lost(app);
         }
         RunEvent::ExitRequested { .. } => {
             selection::shutdown(app);

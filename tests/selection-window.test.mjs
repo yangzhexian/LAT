@@ -138,3 +138,59 @@ test('bubble leaves physical clicks to native capture and preserves accessible a
     dom.window.close();
   }
 });
+
+test('unpinned popup drags from title, icon and header while controls retain their actions', async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost/?window=selection' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  window.__TAURI_INTERNALS__ = {};
+  const calls = [];
+  const listeners = new Set();
+  globalThis.__selectionTest = {
+    async invoke(command, args) {
+      calls.push({ command, args });
+      if (command === 'selection_get_config') return { theme: 'light', reduceMotion: false, targetLanguage: 'zh' };
+      if (command === 'selection_snapshot') return null;
+    },
+    async listen(_event, callback) {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+    async emitTo() {},
+  };
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { SelectionWindow } = await loadSelectionWindow();
+  const root = createRoot(document.getElementById('root'));
+  const press = (element, button = 0) => React.act(async () => element.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button, detail: 1 })));
+  const dragCount = () => calls.filter(({ command }) => command === 'selection_start_dragging').length;
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(React.StrictMode, null, React.createElement(SelectionWindow)));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const pin = document.querySelector('[aria-label="固定窗口"]');
+    assert.equal(pin.getAttribute('aria-pressed'), 'false');
+    for (const selector of ['.selection-header', '.selection-brand strong', '.selection-brand span', '.selection-brand svg path']) {
+      await press(document.querySelector(selector));
+    }
+    assert.equal(dragCount(), 4);
+    assert.equal(pin.getAttribute('aria-pressed'), 'false', 'dragging must not pin the window');
+    assert.equal(calls.filter(({ command }) => command === 'selection_set_pinned').length, 0);
+    await press(document.querySelector('.selection-brand strong'), 1);
+    await press(document.querySelector('.selection-brand strong'), 2);
+    for (const button of document.querySelectorAll('.selection-actions button')) {
+      await press(button);
+      await press(button.querySelector('path'));
+    }
+    assert.equal(dragCount(), 4, 'right/middle clicks and action buttons must not drag');
+    await React.act(async () => pin.click());
+    assert.deepEqual(calls.find(({ command }) => command === 'selection_set_pinned').args, { pinned: true });
+    await press(document.querySelector('.selection-brand strong'));
+    assert.equal(dragCount(), 5, 'pinned windows are also draggable');
+  } finally {
+    await React.act(async () => root.unmount());
+    assert.equal(listeners.size, 0);
+    delete globalThis.__selectionTest;
+    dom.window.close();
+  }
+});

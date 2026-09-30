@@ -129,6 +129,10 @@ export function SelectionWindow() {
     try { await invokeSelection("selection_set_pinned", { pinned: !pinned }); setPinned(!pinned); }
     catch (error) { controllerRef.current?.notify(String(error)); }
   }
+  async function startDragging() {
+    try { await invokeSelection("selection_start_dragging"); }
+    catch (error) { controllerRef.current?.notify(String(error)); }
+  }
   async function setLanguage(language: string) {
     const next = { ...configRef.current, targetLanguage: language };
     configRef.current = next;
@@ -154,8 +158,12 @@ export function SelectionWindow() {
       if (event.key === "Escape") { event.preventDefault(); void close(); }
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void controllerRef.current?.run(config.targetLanguage); }
     }}>
-      <header className="selection-header" data-tauri-drag-region>
-        <div className="selection-brand" data-tauri-drag-region><Icon name="translate" /><strong data-tauri-drag-region>划词翻译</strong><span>LAT</span></div>
+      <header className="selection-header" onMouseDown={(event) => {
+        if (event.button !== 0 || (event.target as Element).closest(".selection-actions")) return;
+        event.preventDefault();
+        void startDragging();
+      }}>
+        <div className="selection-brand"><Icon name="translate" /><strong>划词翻译</strong><span>LAT</span></div>
         <div className="selection-actions">
           <Button className="icon-button" aria-label={pinned ? "取消固定窗口" : "固定窗口"} title={pinned ? "取消固定" : "固定窗口"} aria-pressed={pinned} onClick={() => void togglePin()}><ActionIcon name="pin" /></Button>
           <Button className="icon-button" aria-label="转到主窗口" title="转到主窗口" disabled={busy} onClick={() => void transfer(view.source || undefined)}><ActionIcon name="expand" /></Button>

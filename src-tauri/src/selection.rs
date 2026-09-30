@@ -233,11 +233,79 @@ pub fn close_to_tray(app: &tauri::AppHandle) -> bool {
     !state.0.quitting.load(Ordering::Acquire) && state.0.config.lock().unwrap().close_to_tray
 }
 
-pub fn is_pinned(app: &tauri::AppHandle) -> bool {
-    app.state::<SelectionState>()
+fn should_dismiss_on_blur(
+    pinned: bool,
+    expected_request: &str,
+    current_request: Option<&str>,
+    foreground: Option<bool>,
+) -> bool {
+    !pinned && current_request == Some(expected_request) && foreground == Some(false)
+}
+
+fn popup_is_foreground(window: &tauri::WebviewWindow) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        native::is_foreground(window)
+    }
+    #[cfg(not(windows))]
+    {
+        window.is_focused().ok()
+    }
+}
+
+pub fn on_focus_lost(app: &tauri::AppHandle) {
+    let state = app.state::<SelectionState>();
+    if state.0.pinned.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(request_id) = state
         .0
-        .pinned
-        .load(Ordering::Acquire)
+        .snapshot
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.request_id.clone())
+    else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // WebView2 focus transfers and native dragging can emit Focused(false)
+        // while this top-level window is still foreground. Allow activation to
+        // settle, and retry a temporarily null foreground handle.
+        for _ in 0..3 {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            let Some(window) = app.get_webview_window("selection") else {
+                return;
+            };
+            match popup_is_foreground(&window) {
+                Some(true) => return,
+                None => continue,
+                Some(false) => {
+                    let check_app = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let state = check_app.state::<SelectionState>();
+                        let current = state
+                            .0
+                            .snapshot
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .map(|s| s.request_id.clone());
+                        if should_dismiss_on_blur(
+                            state.0.pinned.load(Ordering::Acquire),
+                            &request_id,
+                            current.as_deref(),
+                            popup_is_foreground(&window),
+                        ) {
+                            dismiss(&check_app);
+                        }
+                    });
+                    return;
+                }
+            }
+        }
+    });
 }
 
 pub fn dismiss(app: &tauri::AppHandle) {
@@ -338,14 +406,16 @@ fn position_window(window: &tauri::WebviewWindow, point: (i32, i32), bubble: boo
     }
 }
 
-fn show_bubble(app: &tauri::AppHandle, point: (i32, i32)) {
-    if let Some(window) = app.get_webview_window("selection-bubble") {
-        position_window(&window, point, true);
-        #[cfg(windows)]
-        native::show_nonactivating(&window);
-        #[cfg(not(windows))]
-        let _ = window.show();
-    }
+fn show_bubble(app: &tauri::AppHandle, point: (i32, i32)) -> Result<(), String> {
+    let window = app
+        .get_webview_window("selection-bubble")
+        .ok_or_else(|| "划词浮标尚未初始化，请重新启用划词翻译。".to_string())?;
+    position_window(&window, point, true);
+    // Keep Tauri's visibility flags synchronized with Windows. This window is
+    // built unfocused and non-focusable, so showing it preserves source focus.
+    window
+        .show()
+        .map_err(|error| format!("划词浮标无法显示：{error}"))
 }
 
 fn publish(
@@ -485,6 +555,13 @@ pub fn selection_set_busy(
 }
 
 #[tauri::command]
+pub fn selection_start_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
+    allowed(&window, &["selection"])?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn selection_set_pinned(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -550,6 +627,21 @@ pub async fn selection_copy(window: tauri::WebviewWindow, text: String) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn blur_only_dismisses_the_same_unpinned_popup_after_external_activation() {
+        assert!(should_dismiss_on_blur(false, "42", Some("42"), Some(false)));
+        assert!(!should_dismiss_on_blur(false, "42", Some("42"), Some(true)));
+        assert!(!should_dismiss_on_blur(false, "42", Some("42"), None));
+        assert!(!should_dismiss_on_blur(true, "42", Some("42"), Some(false)));
+        assert!(!should_dismiss_on_blur(
+            false,
+            "42",
+            Some("43"),
+            Some(false)
+        ));
+        assert!(!should_dismiss_on_blur(false, "42", None, Some(false)));
+    }
+
     #[test]
     fn positions_stay_in_work_area_with_negative_monitor_origin() {
         assert_eq!(

@@ -566,6 +566,29 @@ fn capture_is_current(inner: &Inner, id: u64, revision: u64, observed_revision: 
         && revision == observed_revision
 }
 
+fn capture_after_gesture(
+    mut is_current: impl FnMut() -> bool,
+    mut capture: impl FnMut() -> Capture,
+    mut wait: impl FnMut(Duration),
+) -> Option<Capture> {
+    // A browser can expose an empty TextPattern before its mouse-up selection
+    // is committed. Retry once without copying, and never retry protected/errors.
+    for attempt in 0..2 {
+        wait(Duration::from_millis(if attempt == 0 { 70 } else { 100 }));
+        if !is_current() {
+            return None;
+        }
+        let result = capture();
+        if !is_current() {
+            return None;
+        }
+        if attempt == 1 || !result.text.trim().is_empty() || result.error.is_some() {
+            return Some(result);
+        }
+    }
+    unreachable!("the last attempt always returns")
+}
+
 fn start_shortcut(inner: &Inner, revision: u64, observed_revision: u64) -> Option<u64> {
     if !inner.can_capture() || revision != observed_revision {
         return None;
@@ -680,20 +703,22 @@ fn coordinate(
                 if !gesture || revision != CAPTURE_ACTIVITY.load(Ordering::Acquire) {
                     continue;
                 }
-                // Browsers commonly publish TextPattern selection just after mouseup.
-                thread::sleep(Duration::from_millis(70));
                 let id = start.unwrap().2;
-                let capture = uia.capture(target, true);
-                if !target.focused()
-                    || !capture_is_current(
-                        &inner,
-                        id,
-                        revision,
-                        CAPTURE_ACTIVITY.load(Ordering::Acquire),
-                    )
-                {
+                let Some(capture) = capture_after_gesture(
+                    || {
+                        target.focused()
+                            && capture_is_current(
+                                &inner,
+                                id,
+                                revision,
+                                CAPTURE_ACTIVITY.load(Ordering::Acquire),
+                            )
+                    },
+                    || uia.capture(target, true),
+                    thread::sleep,
+                ) else {
                     continue;
-                }
+                };
                 if !capture.text.is_empty() || (capture.candidate && capture.error.is_none()) {
                     if capture.candidate {
                         verified_gesture = Some((target, Instant::now()));
@@ -704,7 +729,10 @@ fn coordinate(
                         created: Instant::now(),
                         capture,
                     });
-                    show_bubble(&app, target.point);
+                    if let Err(error) = show_bubble(&app, target.point) {
+                        pending = None;
+                        let _ = app.emit_to("main", "selection-native-error", error);
+                    }
                 }
             }
             Event::Shortcut(target, revision) => {
@@ -872,19 +900,14 @@ pub fn use_system_corners(window: &tauri::WebviewWindow) {
     }
 }
 
-pub fn show_nonactivating(window: &tauri::WebviewWindow) {
-    if let Ok(hwnd) = window.hwnd() {
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
+pub fn is_foreground(window: &tauri::WebviewWindow) -> Option<bool> {
+    let hwnd = window.hwnd().ok()?;
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.0.is_null() {
+            None
+        } else {
+            Some(GetAncestor(foreground, GA_ROOT) == hwnd)
         }
     }
 }
@@ -1194,6 +1217,94 @@ mod tests {
             time: 100,
             revision,
         }
+    }
+
+    #[test]
+    fn mouseup_selection_can_become_available_after_an_initial_empty_uia_read() {
+        let mut reads = 0;
+        let mut waits = Vec::new();
+        let result = capture_after_gesture(
+            || true,
+            || {
+                reads += 1;
+                if reads == 1 {
+                    Capture {
+                        known_empty: true,
+                        ..Default::default()
+                    }
+                } else {
+                    Capture {
+                        text: "Selected text".into(),
+                        ..Default::default()
+                    }
+                }
+            },
+            |duration| waits.push(duration),
+        )
+        .unwrap();
+        assert_eq!(result.text, "Selected text");
+        assert_eq!(reads, 2);
+        assert_eq!(
+            waits,
+            vec![Duration::from_millis(70), Duration::from_millis(100)]
+        );
+    }
+
+    #[test]
+    fn gestures_do_not_retry_password_errors_or_unresponsive_providers() {
+        for error in ["password", "timeout"] {
+            let mut reads = 0;
+            let result = capture_after_gesture(
+                || true,
+                || {
+                    reads += 1;
+                    Capture {
+                        error: Some(error.into()),
+                        ..Default::default()
+                    }
+                },
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(reads, 1);
+            assert_eq!(result.error.as_deref(), Some(error));
+        }
+    }
+
+    #[test]
+    fn gestures_stop_before_retry_when_input_or_focus_changes() {
+        let valid = std::cell::Cell::new(true);
+        let mut reads = 0;
+        let mut waits = 0;
+        let result = capture_after_gesture(
+            || valid.get(),
+            || {
+                reads += 1;
+                Capture::default()
+            },
+            |_| {
+                waits += 1;
+                if waits == 2 {
+                    valid.set(false);
+                }
+            },
+        );
+        assert!(result.is_none());
+        assert_eq!(reads, 1);
+        // A change during the provider call also discards its text.
+        valid.set(true);
+        let result = capture_after_gesture(
+            || valid.get(),
+            || {
+                valid.set(false);
+                Capture {
+                    text: "Stale selected text".into(),
+                    ..Default::default()
+                }
+            },
+            |_| {},
+        );
+        assert!(result.is_none());
     }
 
     #[test]

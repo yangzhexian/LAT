@@ -2,12 +2,12 @@
 :root[data-selection-window] body { min-width: 0; min-height: 100vh; background: transparent; overflow: hidden; }
 :root[data-selection-window] #root { min-height: 100vh; }
 .selection-window { height: 100vh; display: flex; flex-direction: column; background: color-mix(in srgb, var(--panel) 91%, transparent); overflow: hidden; backdrop-filter: blur(22px) saturate(130%); font-size: 13px; }
-.selection-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px 9px 15px; border-bottom: 1px solid var(--line-soft); user-select: none; }
+.selection-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px 9px 15px; border-bottom: 1px solid var(--line-soft); user-select: none; cursor: move; }
 .selection-brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .selection-brand > svg { width: 21px; height: 21px; color: var(--accent); }
 .selection-brand strong { font-size: 13px; font-weight: 650; }
 .selection-brand > span { color: var(--subtle); font-size: 10px; letter-spacing: .12em; }
-.selection-actions { display: flex; gap: 3px; }
+.selection-actions { display: flex; gap: 3px; cursor: default; }
 .selection-window .icon-button { width: 30px; height: 30px; padding: 6px; border-radius: 8px; }
 .selection-window .icon-button[aria-pressed="true"] { background: var(--control-hover); color: var(--accent); }
 .selection-window .icon-button svg { width: 17px; height: 17px; }
