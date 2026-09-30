@@ -4,7 +4,7 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.2.1-beta.1`（本地验收版）
+> 当前版本：`0.2.1-beta.2`（本地复验版）
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
@@ -42,7 +42,7 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 
 浮窗最多直接翻译 5,000 个 Unicode 字符，更长内容可完整转入主窗口。主窗口内容替换前会确认。模型未启用时不会自动加载；主窗口正翻译长文时显示忙碌，稍后手动重试。关闭浮窗仅取消它自己的请求。完整成功结果遵守现有历史开关和容量设置，标记为“划词翻译”。
 
-本版跨软件交互等待用户人工验收，兼容性记录见 [划词翻译验收清单](docs/acceptance/lat-selection-translation-checklist.md)，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
+beta.1 的用户验收记录已保留；beta.2 修复浮标首次点击、鼠标延迟与浮窗圆角，等待针对这些问题复验。兼容性记录见 [划词翻译验收清单](docs/acceptance/lat-selection-translation-checklist.md)，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
 
 ## 模型选择与推荐
 
