@@ -149,6 +149,9 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
         if let Some(bubble) = app.get_webview_window("selection-bubble") {
             native::make_nonactivating(&bubble);
         }
+        if let Some(window) = app.get_webview_window("selection") {
+            native::use_system_corners(&window);
+        }
         let state = app.state::<SelectionState>();
         let controller = native::Controller::new(app.clone(), state.0.clone());
         *state.0.controller.lock().unwrap() = Some(controller);

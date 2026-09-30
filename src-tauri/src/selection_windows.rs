@@ -11,6 +11,9 @@ use windows::core::Interface;
 use windows::Win32::Foundation::{
     GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
+use windows::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
@@ -62,7 +65,7 @@ impl Target {
         unsafe {
             let window = GetAncestor(WindowFromPoint(point), GA_ROOT);
             let process = window_process(window);
-            if window.0.is_null() || process == 0 || process == std::process::id() {
+            if window.0.is_null() || process == 0 {
                 return None;
             }
             Some(Self {
@@ -82,18 +85,29 @@ unsafe fn window_process(window: HWND) -> u32 {
 
 #[derive(Clone, Copy)]
 enum Event {
+    Mouse(MouseEvent),
     Down(Target, u32, u64),
-    Up(Target, u32),
+    Up(Target, u32, u64),
     Clear,
     Shortcut(Target, u64),
-    Activate,
+    Activate(u64),
 }
 
-// The low-level hook never waits on a lock, makes a UIA call, or changes a window.
+#[derive(Clone, Copy)]
+struct MouseEvent {
+    message: u32,
+    point: (i32, i32),
+    time: u32,
+    revision: u64,
+}
+
+// Hooks only update counters and forward raw events. Window hit-testing can send
+// synchronous messages to other threads and must stay on the coordinator.
 static HOOK_QUEUE: OnceLock<SyncSender<Event>> = OnceLock::new();
 static HOOK_INNER: OnceLock<Arc<Inner>> = OnceLock::new();
 // Counters only: no key codes, characters, or input content are retained.
 static INPUT_ACTIVITY: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_ACTIVITY: AtomicU64 = AtomicU64::new(0);
 static HOOKS_READY: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -117,6 +131,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             .iter()
             .any(|modifier| modifier.0 == key)
         {
+            CAPTURE_ACTIVITY.fetch_add(1, Ordering::AcqRel);
             if let Some(inner) = HOOK_INNER.get() {
                 inner.generation.fetch_add(1, Ordering::AcqRel);
             }
@@ -135,31 +150,22 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MOUSEWHEEL | WM_MOUSEHWHEEL
             ) {
                 INPUT_ACTIVITY.fetch_add(1, Ordering::AcqRel);
-                let point_window = WindowFromPoint(info.pt);
-                // Clicking our nonactivating bubble must preserve the source's selection.
-                if window_process(point_window) != std::process::id() {
-                    let event = match (message, Target::at_point(info.pt)) {
-                        (WM_LBUTTONDOWN, Some(mut target)) => {
-                            target.point = (info.pt.x, info.pt.y);
-                            let generation = HOOK_INNER
-                                .get()
-                                .map(|inner| inner.generation.fetch_add(1, Ordering::AcqRel) + 1)
-                                .unwrap_or(0);
-                            Event::Down(target, info.time, generation)
+                let revision = CAPTURE_ACTIVITY.fetch_add(1, Ordering::AcqRel) + 1;
+                if let Some(queue) = HOOK_QUEUE.get() {
+                    if queue
+                        .try_send(Event::Mouse(MouseEvent {
+                            message,
+                            point: (info.pt.x, info.pt.y),
+                            time: info.time,
+                            revision,
+                        }))
+                        .is_err()
+                    {
+                        // Overflow invalidates old captures instead of using a stale
+                        // selection after an interaction we could not forward.
+                        if let Some(inner) = HOOK_INNER.get() {
+                            inner.generation.fetch_add(1, Ordering::AcqRel);
                         }
-                        (WM_LBUTTONUP, Some(mut target)) => {
-                            target.point = (info.pt.x, info.pt.y);
-                            Event::Up(target, info.time)
-                        }
-                        _ => {
-                            if let Some(inner) = HOOK_INNER.get() {
-                                inner.generation.fetch_add(1, Ordering::AcqRel);
-                            }
-                            Event::Clear
-                        }
-                    };
-                    if let Some(queue) = HOOK_QUEUE.get() {
-                        let _ = queue.try_send(event);
                     }
                 }
             }
@@ -242,7 +248,8 @@ impl Controller {
                         let _ = TranslateMessage(&message);
                         DispatchMessageW(&message);
                     }
-                    thread::sleep(Duration::from_millis(12));
+                    // Unlike sleep, this wakes immediately for sent hook messages.
+                    let _ = MsgWaitForMultipleObjectsEx(None, 50, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
                 }
                 if let Some(handle) = installed {
                     HOOKS_READY.store(false, Ordering::Release);
@@ -274,13 +281,15 @@ impl Controller {
             return;
         }
         if let Some(target) = Target::current() {
-            let id = self.inner.generation.fetch_add(1, Ordering::AcqRel) + 1;
-            let _ = self.queue.try_send(Event::Shortcut(target, id));
+            let _ = self.queue.try_send(Event::Shortcut(
+                target,
+                CAPTURE_ACTIVITY.load(Ordering::Acquire),
+            ));
         }
     }
     pub fn activate(&self) -> Result<(), String> {
         self.queue
-            .try_send(Event::Activate)
+            .try_send(Event::Activate(CAPTURE_ACTIVITY.load(Ordering::Acquire)))
             .map_err(|_| "取词正在处理中，请重试".into())
     }
     pub fn stop(self) {
@@ -512,6 +521,60 @@ struct Pending {
     capture: Capture,
 }
 
+fn route_mouse(
+    mouse: MouseEvent,
+    target: Option<Target>,
+    bubble_window: usize,
+    own_process: u32,
+    bubble_pressed: &mut bool,
+    inner: &Inner,
+) -> Option<Event> {
+    if target.is_some_and(|target| target.window == bubble_window) {
+        match mouse.message {
+            WM_LBUTTONDOWN => *bubble_pressed = true,
+            WM_LBUTTONUP => {
+                if std::mem::take(bubble_pressed) {
+                    // WebView2 may not deliver the first DOM click in an inactive
+                    // window. The native down/up pair is the activation authority.
+                    return Some(Event::Activate(mouse.revision));
+                }
+            }
+            _ => *bubble_pressed = false,
+        }
+        return None;
+    }
+    *bubble_pressed = false;
+    match (
+        mouse.message,
+        target.filter(|target| target.process != own_process),
+    ) {
+        (WM_LBUTTONDOWN, Some(target)) => {
+            let id = inner.generation.fetch_add(1, Ordering::AcqRel) + 1;
+            Some(Event::Down(target, mouse.time, id))
+        }
+        (WM_LBUTTONUP, Some(target)) => Some(Event::Up(target, mouse.time, mouse.revision)),
+        _ => {
+            inner.generation.fetch_add(1, Ordering::AcqRel);
+            Some(Event::Clear)
+        }
+    }
+}
+
+fn capture_is_current(inner: &Inner, id: u64, revision: u64, observed_revision: u64) -> bool {
+    inner.can_capture()
+        && id == inner.generation.load(Ordering::Acquire)
+        && revision == observed_revision
+}
+
+fn start_shortcut(inner: &Inner, revision: u64, observed_revision: u64) -> Option<u64> {
+    if !inner.can_capture() || revision != observed_revision {
+        return None;
+    }
+    // Allocate after earlier queued mouse events have been routed. Otherwise an
+    // earlier mouse-down can invalidate a newer shortcut when UIA is slow.
+    Some(inner.generation.fetch_add(1, Ordering::AcqRel) + 1)
+}
+
 fn is_selection_gesture(
     start: Target,
     end: Target,
@@ -543,6 +606,12 @@ fn coordinate(
     let mut last_up = None;
     let mut pending: Option<Pending> = None;
     let mut verified_gesture: Option<(Target, Instant)> = None;
+    let bubble_window = app
+        .get_webview_window("selection-bubble")
+        .and_then(|window| window.hwnd().ok())
+        .map(|hwnd| hwnd.0 as usize)
+        .unwrap_or(0);
+    let mut bubble_pressed = false;
     while !stopped.load(Ordering::Acquire) {
         if verified_gesture.is_some_and(|(target, created)| {
             !target.focused() || created.elapsed() > SELECTION_LIFETIME || !inner.can_capture()
@@ -564,8 +633,28 @@ fn coordinate(
         if !inner.can_capture() {
             down = None;
             pending = None;
+            bubble_pressed = false;
             continue;
         }
+        let event = if let Event::Mouse(mouse) = event {
+            let target = Target::at_point(POINT {
+                x: mouse.point.0,
+                y: mouse.point.1,
+            });
+            let Some(event) = route_mouse(
+                mouse,
+                target,
+                bubble_window,
+                std::process::id(),
+                &mut bubble_pressed,
+                &inner,
+            ) else {
+                continue;
+            };
+            event
+        } else {
+            event
+        };
         match event {
             Event::Clear => {
                 pending = None;
@@ -579,7 +668,7 @@ fn coordinate(
                 hide_bubble(&app);
                 down = Some((target, time, id));
             }
-            Event::Up(target, time) => {
+            Event::Up(target, time, revision) => {
                 let start = down.take();
                 let gesture = start.is_some_and(|(start, _, id)| {
                     id == inner.generation.load(Ordering::Acquire)
@@ -588,7 +677,7 @@ fn coordinate(
                         })
                 });
                 last_up = Some((target, time));
-                if !gesture {
+                if !gesture || revision != CAPTURE_ACTIVITY.load(Ordering::Acquire) {
                     continue;
                 }
                 // Browsers commonly publish TextPattern selection just after mouseup.
@@ -596,8 +685,12 @@ fn coordinate(
                 let id = start.unwrap().2;
                 let capture = uia.capture(target, true);
                 if !target.focused()
-                    || !inner.can_capture()
-                    || id != inner.generation.load(Ordering::Acquire)
+                    || !capture_is_current(
+                        &inner,
+                        id,
+                        revision,
+                        CAPTURE_ACTIVITY.load(Ordering::Acquire),
+                    )
                 {
                     continue;
                 }
@@ -614,24 +707,34 @@ fn coordinate(
                     show_bubble(&app, target.point);
                 }
             }
-            Event::Shortcut(target, id) => {
-                if !target.focused() || id != inner.generation.load(Ordering::Acquire) {
+            Event::Shortcut(target, revision) => {
+                if !target.focused() {
                     continue;
                 }
+                let Some(id) =
+                    start_shortcut(&inner, revision, CAPTURE_ACTIVITY.load(Ordering::Acquire))
+                else {
+                    continue;
+                };
                 let capture = uia.capture(target, false);
                 let recent_gesture = verified_gesture.is_some_and(|(previous, created)| {
                     previous.window == target.window && created.elapsed() <= SELECTION_LIFETIME
                 });
                 pending = None;
-                finish_capture(&app, &inner, target, id, capture, recent_gesture);
+                finish_capture(&app, &inner, target, id, revision, capture, recent_gesture);
             }
-            Event::Activate => {
+            Event::Activate(revision) => {
                 let Some(previous) = pending.take() else {
                     hide_bubble(&app);
                     continue;
                 };
-                if previous.id != inner.generation.load(Ordering::Acquire)
-                    || !previous.target.focused()
+                if !previous.target.focused()
+                    || !capture_is_current(
+                        &inner,
+                        previous.id,
+                        revision,
+                        CAPTURE_ACTIVITY.load(Ordering::Acquire),
+                    )
                 {
                     hide_bubble(&app);
                     continue;
@@ -643,10 +746,12 @@ fn coordinate(
                     &inner,
                     previous.target,
                     previous.id,
+                    revision,
                     capture,
                     previous.capture.candidate,
                 );
             }
+            Event::Mouse(_) => unreachable!("raw mouse events are routed above"),
         }
     }
 }
@@ -665,10 +770,18 @@ fn finish_capture(
     inner: &Arc<Inner>,
     target: Target,
     id: u64,
+    revision: u64,
     mut capture: Capture,
     recent_gesture: bool,
 ) {
-    if !target.focused() || !inner.can_capture() || id != inner.generation.load(Ordering::Acquire) {
+    if !target.focused()
+        || !capture_is_current(
+            inner,
+            id,
+            revision,
+            CAPTURE_ACTIVITY.load(Ordering::Acquire),
+        )
+    {
         hide_bubble(app);
         return;
     }
@@ -684,7 +797,12 @@ fn finish_capture(
             .map(|hwnd| hwnd.0 as usize);
         if let Some(owner) = owner {
             match copy_selection(target, owner, || {
-                inner.can_capture() && id == inner.generation.load(Ordering::Acquire)
+                capture_is_current(
+                    inner,
+                    id,
+                    revision,
+                    CAPTURE_ACTIVITY.load(Ordering::Acquire),
+                )
             }) {
                 Ok(text) => {
                     capture.text = text;
@@ -704,7 +822,14 @@ fn finish_capture(
             .into(),
         );
     }
-    if !target.focused() {
+    if !target.focused()
+        || !capture_is_current(
+            inner,
+            id,
+            revision,
+            CAPTURE_ACTIVITY.load(Ordering::Acquire),
+        )
+    {
         hide_bubble(app);
         return;
     }
@@ -727,6 +852,21 @@ pub fn make_nonactivating(window: &tauri::WebviewWindow) {
                 hwnd,
                 GWL_EXSTYLE,
                 style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize,
+            );
+        }
+    }
+}
+
+pub fn use_system_corners(window: &tauri::WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            // Windows 11 owns the radius and clipping. Older Windows versions
+            // reject this optional attribute and retain their system geometry.
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &DWMWCP_ROUND as *const _ as _,
+                size_of_val(&DWMWCP_ROUND) as u32,
             );
         }
     }
@@ -1045,6 +1185,191 @@ mod tests {
             process: 100,
             point,
         }
+    }
+
+    fn mouse(message: u32, revision: u64) -> MouseEvent {
+        MouseEvent {
+            message,
+            point: (10, 10),
+            time: 100,
+            revision,
+        }
+    }
+
+    #[test]
+    fn first_native_bubble_click_activates_without_dom_click_or_invalidating_selection() {
+        let state = super::super::SelectionState::default();
+        state.0.generation.store(42, Ordering::Relaxed);
+        let bubble = Target {
+            window: 2,
+            process: 200,
+            point: (10, 10),
+        };
+        let mut pressed = false;
+        assert!(route_mouse(
+            mouse(WM_LBUTTONDOWN, 10),
+            Some(bubble),
+            2,
+            200,
+            &mut pressed,
+            &state.0
+        )
+        .is_none());
+        assert!(pressed);
+        assert!(matches!(
+            route_mouse(
+                mouse(WM_LBUTTONUP, 11),
+                Some(bubble),
+                2,
+                200,
+                &mut pressed,
+                &state.0
+            ),
+            Some(Event::Activate(11))
+        ));
+        assert!(!pressed);
+        assert_eq!(state.0.generation.load(Ordering::Relaxed), 42);
+        // A stray mouse-up cannot trigger a second translation.
+        assert!(route_mouse(
+            mouse(WM_LBUTTONUP, 12),
+            Some(bubble),
+            2,
+            200,
+            &mut pressed,
+            &state.0
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn external_and_own_window_clicks_invalidate_bubble_without_activating_it() {
+        let state = super::super::SelectionState::default();
+        let mut pressed = true;
+        assert!(matches!(
+            route_mouse(
+                mouse(WM_LBUTTONDOWN, 10),
+                Some(target((10, 10))),
+                2,
+                200,
+                &mut pressed,
+                &state.0
+            ),
+            Some(Event::Down(_, 100, 1))
+        ));
+        assert!(!pressed);
+        let own = Target {
+            process: 200,
+            ..target((10, 10))
+        };
+        assert!(matches!(
+            route_mouse(
+                mouse(WM_LBUTTONDOWN, 11),
+                Some(own),
+                2,
+                200,
+                &mut pressed,
+                &state.0
+            ),
+            Some(Event::Clear)
+        ));
+        assert_eq!(state.0.generation.load(Ordering::Relaxed), 2);
+        assert!(matches!(
+            route_mouse(
+                mouse(WM_MOUSEWHEEL, 12),
+                None,
+                2,
+                200,
+                &mut pressed,
+                &state.0
+            ),
+            Some(Event::Clear)
+        ));
+        assert_eq!(state.0.generation.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn dragging_into_or_out_of_bubble_does_not_activate_it() {
+        let state = super::super::SelectionState::default();
+        let bubble = Target {
+            window: 2,
+            process: 200,
+            ..target((10, 10))
+        };
+        let mut pressed = false;
+        route_mouse(
+            mouse(WM_LBUTTONDOWN, 1),
+            Some(target((10, 10))),
+            2,
+            200,
+            &mut pressed,
+            &state.0,
+        );
+        assert!(route_mouse(
+            mouse(WM_LBUTTONUP, 2),
+            Some(bubble),
+            2,
+            200,
+            &mut pressed,
+            &state.0
+        )
+        .is_none());
+        route_mouse(
+            mouse(WM_LBUTTONDOWN, 3),
+            Some(bubble),
+            2,
+            200,
+            &mut pressed,
+            &state.0,
+        );
+        assert!(matches!(
+            route_mouse(
+                mouse(WM_LBUTTONUP, 4),
+                Some(target((10, 10))),
+                2,
+                200,
+                &mut pressed,
+                &state.0
+            ),
+            Some(Event::Up(_, _, 4))
+        ));
+        assert!(!pressed);
+    }
+
+    #[test]
+    fn delayed_capture_rejects_new_pointer_input_before_coordinator_routes_it() {
+        let state = super::super::SelectionState::default();
+        state.0.enabled.store(true, Ordering::Relaxed);
+        state.0.generation.store(42, Ordering::Relaxed);
+        assert!(capture_is_current(&state.0, 42, 10, 10));
+        // Hook counters advance immediately even when UIA blocks the coordinator.
+        assert!(!capture_is_current(&state.0, 42, 10, 11));
+        assert!(!capture_is_current(&state.0, 41, 10, 10));
+        state.0.busy.store(true, Ordering::Relaxed);
+        assert!(!capture_is_current(&state.0, 42, 10, 10));
+        state.0.busy.store(false, Ordering::Relaxed);
+        state.0.enabled.store(false, Ordering::Relaxed);
+        assert!(!capture_is_current(&state.0, 42, 10, 10));
+    }
+
+    #[test]
+    fn shortcut_after_queued_mouse_events_gets_a_fresh_id_but_rejects_later_input() {
+        let state = super::super::SelectionState::default();
+        state.0.enabled.store(true, Ordering::Relaxed);
+        let mut pressed = false;
+        route_mouse(
+            mouse(WM_LBUTTONDOWN, 1),
+            Some(target((10, 10))),
+            2,
+            200,
+            &mut pressed,
+            &state.0,
+        );
+        assert_eq!(start_shortcut(&state.0, 2, 2), Some(2));
+        assert!(capture_is_current(&state.0, 2, 2, 2));
+        assert_eq!(start_shortcut(&state.0, 2, 3), None);
+        assert_eq!(state.0.generation.load(Ordering::Relaxed), 2);
+        state.0.paused.store(true, Ordering::Relaxed);
+        assert_eq!(start_shortcut(&state.0, 3, 3), None);
     }
 
     #[test]

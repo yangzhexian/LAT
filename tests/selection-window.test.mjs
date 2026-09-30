@@ -5,6 +5,19 @@ import { JSDOM } from 'jsdom';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
+async function loadSelectionWindow() {
+  const outfile = 'artifacts/validation/selection-window-test.mjs';
+  await build({ entryPoints: ['src/features/selection/SelectionWindow.tsx'], outfile, bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' }, plugins: [{ name: 'native-selection-test', setup(build) {
+    build.onResolve({ filter: /^@tauri-apps\/api\/(core|event)$/ }, ({ path }) => ({ path, namespace: 'mock' }));
+    build.onLoad({ filter: /.*/, namespace: 'mock' }, ({ path }) => ({ contents: path.endsWith('/core')
+      ? 'export const invoke = (...args) => globalThis.__selectionTest.invoke(...args);'
+      : 'export const listen = (...args) => globalThis.__selectionTest.listen(...args); export const emitTo = (...args) => globalThis.__selectionTest.emitTo(...args);' }));
+    build.onResolve({ filter: /^better-react-mathjax$/ }, () => ({ path: 'mathjax', namespace: 'math' }));
+    build.onLoad({ filter: /.*/, namespace: 'math' }, () => ({ contents: 'export const MathJaxContext = ({children}) => children; export const MathJax = ({children}) => children;' }));
+  } }] });
+  return import(pathToFileURL(resolve(outfile)).href);
+}
+
 test('popup listens before handshake, waits for remembered target, and cleans up StrictMode listeners', async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost/?window=selection' });
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
@@ -43,17 +56,9 @@ test('popup listens before handshake, waits for remembered target, and cleans up
       init.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true });
     } }));
   };
-  await build({ entryPoints: ['src/features/selection/SelectionWindow.tsx'], outfile: 'artifacts/validation/selection-window-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' }, plugins: [{ name: 'native-selection-test', setup(build) {
-    build.onResolve({ filter: /^@tauri-apps\/api\/(core|event)$/ }, ({ path }) => ({ path, namespace: 'mock' }));
-    build.onLoad({ filter: /.*/, namespace: 'mock' }, ({ path }) => ({ contents: path.endsWith('/core')
-      ? 'export const invoke = (...args) => globalThis.__selectionTest.invoke(...args);'
-      : 'export const listen = (...args) => globalThis.__selectionTest.listen(...args); export const emitTo = (...args) => globalThis.__selectionTest.emitTo(...args);' }));
-    build.onResolve({ filter: /^better-react-mathjax$/ }, () => ({ path: 'mathjax', namespace: 'math' }));
-    build.onLoad({ filter: /.*/, namespace: 'math' }, () => ({ contents: 'export const MathJaxContext = ({children}) => children; export const MathJax = ({children}) => children;' }));
-  } }] });
   const React = await import('react');
   const { createRoot } = await import('react-dom/client');
-  const { SelectionWindow } = await import(pathToFileURL(resolve('artifacts/validation/selection-window-test.mjs')).href);
+  const { SelectionWindow } = await loadSelectionWindow();
   const root = createRoot(document.getElementById('root'));
   const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
   const event = async (name, payload) => React.act(async () => {
@@ -88,6 +93,47 @@ test('popup listens before handshake, waits for remembered target, and cleans up
   } finally {
     await React.act(async () => root.unmount());
     globalThis.fetch = originalFetch;
+    delete globalThis.__selectionTest;
+    dom.window.close();
+  }
+});
+
+test('bubble leaves physical clicks to native capture and preserves accessible activation', async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost/?window=selection-bubble' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  window.__TAURI_INTERNALS__ = {};
+  const calls = [];
+  const listeners = new Set();
+  globalThis.__selectionTest = {
+    async invoke(command) {
+      calls.push(command);
+      if (command === 'selection_get_config') return { theme: 'light', reduceMotion: false };
+    },
+    async listen(_event, callback) {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+  };
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { SelectionBubble } = await loadSelectionWindow();
+  const root = createRoot(document.getElementById('root'));
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(React.StrictMode, null, React.createElement(SelectionBubble)));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal(listeners.size, 1);
+    const button = document.querySelector('[aria-label="翻译所选文字"]');
+    for (const detail of [1, 2]) {
+      await React.act(async () => button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, detail })));
+    }
+    assert.equal(calls.filter((command) => command === 'selection_activate').length, 0, 'DOM mouse clicks must not duplicate the native request');
+    await React.act(async () => button.click());
+    assert.equal(calls.filter((command) => command === 'selection_activate').length, 1);
+  } finally {
+    await React.act(async () => root.unmount());
+    assert.equal(listeners.size, 0);
     delete globalThis.__selectionTest;
     dom.window.close();
   }

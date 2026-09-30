@@ -217,7 +217,10 @@ export function SelectionBubble() {
     void initialize().catch(() => undefined);
     return () => { stopped = true; off?.(); delete document.documentElement.dataset.selectionWindow; };
   }, []);
-  return <Button className="selection-bubble" aria-label="翻译所选文字" title={error || "翻译所选文字"} onClick={() => {
+  return <Button className="selection-bubble" aria-label="翻译所选文字" title={error || "翻译所选文字"} onClick={(event) => {
+    // Physical clicks are handled by the native down/up pair, even when WebView2
+    // misses the first click. Keep synthetic accessibility activation available.
+    if (event.detail !== 0) return;
     void invokeSelection("selection_activate").catch((reason) => setError(String(reason)));
   }}><Icon name="translate" /></Button>;
 }
