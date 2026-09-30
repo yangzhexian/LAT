@@ -1,4 +1,4 @@
-//! Windows-only primitives. No native operation is run by the unit tests below.
+//! Windows-only primitives. Desktop diagnostics are opt-in ignored tests.
 use super::{hide_bubble, publish, show_bubble, Inner};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,6 +30,7 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_millis(700);
 const SELECTION_LIFETIME: Duration = Duration::from_secs(5);
 const MAX_CAPTURE_CHARS: usize = 100_000;
 const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
+const LAT_COPY_INPUT_TAG: usize = 0x4c415443;
 
 #[derive(Clone, Copy, Debug)]
 struct Target {
@@ -111,7 +112,7 @@ static CAPTURE_ACTIVITY: AtomicU64 = AtomicU64::new(0);
 static HOOKS_READY: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && (*(lparam.0 as *const KBDLLHOOKSTRUCT)).flags.0 & LLKHF_INJECTED.0 == 0 {
+    if code >= 0 && !is_own_copy_input(&*(lparam.0 as *const KBDLLHOOKSTRUCT)) {
         INPUT_ACTIVITY.fetch_add(1, Ordering::AcqRel);
         let key = (*(lparam.0 as *const KBDLLHOOKSTRUCT)).vkCode as u16;
         if matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN)
@@ -140,32 +141,42 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     CallNextHookEx(None, code, wparam, lparam)
 }
 
+fn is_own_copy_input(info: &KBDLLHOOKSTRUCT) -> bool {
+    info.flags.0 & LLKHF_INJECTED.0 != 0 && info.dwExtraInfo == LAT_COPY_INPUT_TAG
+}
+
+fn capture_mouse_event(
+    message: u32,
+    info: &MSLLHOOKSTRUCT,
+    activity: &AtomicU64,
+) -> Option<MouseEvent> {
+    if !matches!(
+        message,
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MOUSEWHEEL | WM_MOUSEHWHEEL
+    ) {
+        return None;
+    }
+    // Remote desktops, input utilities and assistive tools can mark genuine user
+    // gestures as injected. LAT never injects mouse input; observe them normally.
+    Some(MouseEvent {
+        message,
+        point: (info.pt.x, info.pt.y),
+        time: info.time,
+        revision: activity.fetch_add(1, Ordering::AcqRel) + 1,
+    })
+}
+
 unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-        if info.flags & LLMHF_INJECTED == 0 {
-            let message = wparam.0 as u32;
-            if matches!(
-                message,
-                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MOUSEWHEEL | WM_MOUSEHWHEEL
-            ) {
-                INPUT_ACTIVITY.fetch_add(1, Ordering::AcqRel);
-                let revision = CAPTURE_ACTIVITY.fetch_add(1, Ordering::AcqRel) + 1;
-                if let Some(queue) = HOOK_QUEUE.get() {
-                    if queue
-                        .try_send(Event::Mouse(MouseEvent {
-                            message,
-                            point: (info.pt.x, info.pt.y),
-                            time: info.time,
-                            revision,
-                        }))
-                        .is_err()
-                    {
-                        // Overflow invalidates old captures instead of using a stale
-                        // selection after an interaction we could not forward.
-                        if let Some(inner) = HOOK_INNER.get() {
-                            inner.generation.fetch_add(1, Ordering::AcqRel);
-                        }
+        if let Some(event) = capture_mouse_event(wparam.0 as u32, info, &CAPTURE_ACTIVITY) {
+            INPUT_ACTIVITY.fetch_add(1, Ordering::AcqRel);
+            if let Some(queue) = HOOK_QUEUE.get() {
+                if queue.try_send(Event::Mouse(event)).is_err() {
+                    // Overflow invalidates old captures instead of using a stale
+                    // selection after an interaction we could not forward.
+                    if let Some(inner) = HOOK_INNER.get() {
+                        inner.generation.fetch_add(1, Ordering::AcqRel);
                     }
                 }
             }
@@ -1043,6 +1054,7 @@ fn key_input(key: VIRTUAL_KEY, up: bool) -> INPUT {
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
                 wVk: key,
+                dwExtraInfo: LAT_COPY_INPUT_TAG,
                 dwFlags: if up {
                     KEYEVENTF_KEYUP
                 } else {
@@ -1202,6 +1214,149 @@ pub fn copy_text(owner: usize, text: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    static DIAGNOSTIC_INPUT: OnceLock<SyncSender<(MouseEvent, bool)>> = OnceLock::new();
+
+    unsafe extern "system" fn diagnostic_mouse_hook(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code >= 0 {
+            let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+            if let Some(event) = capture_mouse_event(wparam.0 as u32, info, &CAPTURE_ACTIVITY) {
+                let injected = info.flags & LLMHF_INJECTED != 0;
+                if let Some(queue) = DIAGNOSTIC_INPUT.get() {
+                    let _ = queue.try_send((event, injected));
+                }
+            }
+        }
+        CallNextHookEx(None, code, wparam, lparam)
+    }
+
+    // Run explicitly with --ignored --nocapture --test-threads=1 while making a
+    // real selection. Only stages/booleans/counts are printed, never text/titles.
+    #[test]
+    #[ignore = "requires an unlocked desktop and physical mouse selection"]
+    fn diagnose_desktop_selection() {
+        // Tauri enables DPI awareness before creating its controller; a test
+        // executable needs the equivalent setup for physical hook coordinates.
+        unsafe {
+            let _ = SetProcessDPIAware();
+        }
+        let (queue, events) = mpsc::sync_channel(32);
+        DIAGNOSTIC_INPUT.set(queue).unwrap();
+        let inner = super::super::SelectionState::default().0;
+        inner.enabled.store(true, Ordering::Release);
+        let _ = HOOK_INNER.set(inner.clone());
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stop = stopped.clone();
+        let hook = thread::spawn(move || unsafe {
+            let module = GetModuleHandleW(None).unwrap();
+            let mouse = SetWindowsHookExW(
+                WH_MOUSE_LL,
+                Some(diagnostic_mouse_hook),
+                Some(module.into()),
+                0,
+            )
+            .unwrap();
+            let keyboard =
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), Some(module.into()), 0)
+                    .unwrap();
+            eprintln!("diagnostic: hooks_ready");
+            while !stop.load(Ordering::Acquire) {
+                let mut message = MSG::default();
+                while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+                let _ = MsgWaitForMultipleObjectsEx(None, 50, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            }
+            UnhookWindowsHookEx(mouse).unwrap();
+            UnhookWindowsHookEx(keyboard).unwrap();
+        });
+        let uia = UiaWorker::new();
+        let mut down = None;
+        let mut last_up = None;
+        let mut bubble_pressed = false;
+        let seconds = std::env::var("LAT_SELECTION_DIAGNOSTIC_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60);
+        let until = Instant::now() + Duration::from_secs(seconds);
+        while Instant::now() < until {
+            let Ok((mouse, injected)) = events.recv_timeout(Duration::from_millis(50)) else {
+                continue;
+            };
+            let target = Target::at_point(POINT {
+                x: mouse.point.0,
+                y: mouse.point.1,
+            });
+            eprintln!(
+                "diagnostic: mouse={} injected={} target={} foreground_match={}",
+                mouse.message,
+                injected,
+                target.is_some(),
+                target.is_some_and(Target::focused)
+            );
+            match route_mouse(
+                mouse,
+                target,
+                0,
+                std::process::id(),
+                &mut bubble_pressed,
+                &inner,
+            ) {
+                Some(Event::Down(target, _, id)) => down = Some((target, id)),
+                Some(Event::Up(target, time, revision)) => {
+                    let start = down.take();
+                    let gesture = start.is_some_and(|(start, id)| {
+                        id == inner.generation.load(Ordering::Acquire)
+                            && is_selection_gesture(start, target, last_up, time, unsafe {
+                                GetDoubleClickTime()
+                            })
+                    });
+                    last_up = Some((target, time));
+                    eprintln!(
+                        "diagnostic: gesture={} fresh={}",
+                        gesture,
+                        revision == CAPTURE_ACTIVITY.load(Ordering::Acquire)
+                    );
+                    if gesture {
+                        let id = start.unwrap().1;
+                        let capture = capture_after_gesture(
+                            || {
+                                target.focused()
+                                    && capture_is_current(
+                                        &inner,
+                                        id,
+                                        revision,
+                                        CAPTURE_ACTIVITY.load(Ordering::Acquire),
+                                    )
+                            },
+                            || uia.capture(target, true),
+                            thread::sleep,
+                        );
+                        if let Some(capture) = capture {
+                            eprintln!(
+                                "diagnostic: uia chars={} candidate={} known_empty={} error={:?} bubble_eligible={}",
+                                capture.text.chars().count(),
+                                capture.candidate,
+                                capture.known_empty,
+                                capture.error,
+                                !capture.text.is_empty() || (capture.candidate && capture.error.is_none())
+                            );
+                        } else {
+                            eprintln!("diagnostic: capture_cancelled");
+                        }
+                    }
+                }
+                _ => down = None,
+            }
+        }
+        stopped.store(true, Ordering::Release);
+        hook.join().unwrap();
+    }
+
     fn target(point: (i32, i32)) -> Target {
         Target {
             window: 1,
@@ -1217,6 +1372,91 @@ mod tests {
             time: 100,
             revision,
         }
+    }
+
+    #[test]
+    fn injected_mouse_gestures_and_later_input_reach_the_capture_state_machine() {
+        for flags in [0, LLMHF_INJECTED, LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED] {
+            let inner = super::super::SelectionState::default().0;
+            inner.enabled.store(true, Ordering::Release);
+            let activity = AtomicU64::new(0);
+            let mut pressed = false;
+            let mut info = MSLLHOOKSTRUCT {
+                pt: POINT { x: 10, y: 10 },
+                time: 100,
+                flags,
+                ..Default::default()
+            };
+            let start = capture_mouse_event(WM_LBUTTONDOWN, &info, &activity).unwrap();
+            let Some(Event::Down(start_target, _, id)) = route_mouse(
+                start,
+                Some(target(start.point)),
+                2,
+                999,
+                &mut pressed,
+                &inner,
+            ) else {
+                panic!("mouse-down must reach the coordinator");
+            };
+            info.pt.x = 100;
+            info.time = 200;
+            let end = capture_mouse_event(WM_LBUTTONUP, &info, &activity).unwrap();
+            let Some(Event::Up(end_target, _, revision)) =
+                route_mouse(end, Some(target(end.point)), 2, 999, &mut pressed, &inner)
+            else {
+                panic!("mouse-up must reach the coordinator");
+            };
+            assert!(is_selection_gesture(
+                start_target,
+                end_target,
+                None,
+                end.time,
+                500
+            ));
+            assert!(capture_is_current(
+                &inner,
+                id,
+                revision,
+                activity.load(Ordering::Acquire)
+            ));
+            // A subsequent remote/remapped wheel event must invalidate a slow read.
+            assert!(capture_mouse_event(WM_MOUSEWHEEL, &info, &activity).is_some());
+            assert!(!capture_is_current(
+                &inner,
+                id,
+                revision,
+                activity.load(Ordering::Acquire)
+            ));
+            let before_move = activity.load(Ordering::Acquire);
+            assert!(capture_mouse_event(WM_MOUSEMOVE, &info, &activity).is_none());
+            assert_eq!(activity.load(Ordering::Acquire), before_move);
+        }
+    }
+
+    #[test]
+    fn only_lat_tagged_copy_keys_are_ignored_as_self_generated_input() {
+        let mut info = KBDLLHOOKSTRUCT {
+            flags: LLKHF_INJECTED,
+            ..Default::default()
+        };
+        assert!(
+            !is_own_copy_input(&info),
+            "remote/remapped keys remain real activity"
+        );
+        for key in [VK_CONTROL, VK_C] {
+            for up in [false, true] {
+                info.dwExtraInfo = unsafe { key_input(key, up).Anonymous.ki.dwExtraInfo };
+                assert!(
+                    is_own_copy_input(&info),
+                    "all LAT copy press/release inputs carry the tag"
+                );
+            }
+        }
+        info.flags = KBDLLHOOKSTRUCT_FLAGS(0);
+        assert!(
+            !is_own_copy_input(&info),
+            "the tag alone does not suppress hardware input"
+        );
     }
 
     #[test]
