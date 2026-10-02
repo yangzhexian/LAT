@@ -193,4 +193,68 @@ export interface TelemetrySample {
 export interface TelemetrySnapshot extends TelemetrySample {
   samples: TelemetrySample[];
   interval: number;
+  inference?: InferenceSnapshot;
+}
+
+export interface InferenceRecord {
+  id: string;
+  model: string;
+  job_id: string | null;
+  segment_index: number | null; // 1-based index within the translation job.
+  attempt: number;
+  status: "running" | "completed" | "cancelled" | "failed";
+  phase: "prefill" | "decode" | "idle";
+  started_at: number;
+  finished_at: number | null;
+  elapsed_ms: number;
+  first_token_ms: number | null;
+  prompt_tokens: number | null;
+  generated_tokens: number | null;
+  total_tokens: number | null;
+  tokens_complete: boolean;
+  tokens_per_second: number | null;
+  prompt_tokens_per_second: number | null;
+  prompt_ms: number | null;
+  decode_ms: number | null;
+  output_chars: number;
+  token_source: "llama.cpp" | "unknown";
+  speed_source: "llama.cpp" | "wall_clock" | "unknown";
+}
+
+export interface ModelArchitecture {
+  available: boolean;
+  source: "gguf" | "unavailable";
+  model: string;
+  architecture: string | null;
+  name: string | null;
+  block_count: number | null;
+  embedding_length: number | null;
+  attention_heads: number | null;
+  kv_heads: number | null;
+  feed_forward_length: number | null;
+  context_length: number | null;
+  expert_count: number | null;
+  expert_used_count: number | null;
+  tensor_count: number | null;
+  parameter_count: number | null;
+  quantization: string | null;
+  message: string;
+}
+
+export interface InferenceSnapshot {
+  session_started_at: number;
+  summary: {
+    calls: number;
+    completed_calls: number;
+    cancelled_calls: number;
+    failed_calls: number;
+    prompt_tokens: number;
+    generated_tokens: number;
+    total_tokens: number;
+    unknown_token_calls: number;
+  };
+  active: InferenceRecord | null;
+  latest: InferenceRecord | null;
+  history: InferenceRecord[];
+  architecture: ModelArchitecture;
 }

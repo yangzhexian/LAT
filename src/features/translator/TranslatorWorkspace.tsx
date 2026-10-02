@@ -242,7 +242,7 @@ export function TranslatorWorkspace({
         </div>
       </header>
       {modelError && <div className="model-error" role="alert">{modelError}</div>}
-      {page === "model" && <section className="model-page">{status.ready ? <ModelDashboard interval={settings.telemetryInterval} windowSeconds={settings.telemetryWindow} /> : setupContent}</section>}
+      {page === "model" && <section className="model-page">{status.ready ? <ModelDashboard interval={settings.telemetryInterval} windowSeconds={settings.telemetryWindow} reduceMotion={settings.reduceMotion} /> : setupContent}</section>}
       <div className="translation-page" hidden={page !== "translate"}>
       <div className="workspace-status" role="status">
         {busy || canResume ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段 · ${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}% · ${message}` : message}

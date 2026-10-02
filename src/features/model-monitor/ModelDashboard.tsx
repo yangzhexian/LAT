@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { getTelemetry } from "../../lib/api";
-import type { GpuSample, TelemetrySample } from "../../types";
+import type { GpuSample, TelemetrySample, TelemetrySnapshot } from "../../types";
+import { InferenceDashboard } from "./InferenceDashboard";
 
 interface Metric { key: keyof GpuSample; label: string; unit: string; scale: (gpu: GpuSample) => number; convert?: number }
 const metrics: Metric[] = [
@@ -43,10 +44,12 @@ function Trend({ samples, gpu, metric, windowSeconds }: { samples: TelemetrySamp
   </article>;
 }
 
-export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval?: number; windowSeconds?: number }) {
+export function ModelDashboard({ interval = 2, windowSeconds = 120, reduceMotion = false }: { interval?: number; windowSeconds?: number; reduceMotion?: boolean }) {
   const [samples, setSamples] = useState<TelemetrySample[]>([]);
-  const [latest, setLatest] = useState<TelemetrySample | null>(null);
+  const [latest, setLatest] = useState<TelemetrySnapshot | null>(null);
   const [error, setError] = useState("");
+  const [connected, setConnected] = useState(true);
+  const [visible, setVisible] = useState(!document.hidden);
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -58,11 +61,12 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
       try {
         const sample = await getTelemetry(controller.signal);
         if (stopped || document.hidden) return;
-        setLatest(sample); setError(sample.message);
+        setLatest(sample); setError(sample.message); setConnected(true);
         setSamples((sample.samples || [sample]).filter((item) => item.timestamp >= sample.timestamp - windowSeconds));
       } catch {
         if (!stopped && !document.hidden) {
           setError("监测连接中断，图表保留上次数据，正在重连…");
+          setConnected(false);
           setSamples((previous) => [...previous, { timestamp: Date.now() / 1000, gpus: [], message: "" }].slice(-601));
         }
       } finally {
@@ -72,6 +76,7 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
     }
     function visibility() {
       clearTimeout(timer);
+      setVisible(!document.hidden);
       if (document.hidden) active?.abort(); else void poll();
     }
     document.addEventListener("visibilitychange", visibility);
@@ -80,6 +85,7 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
   }, [interval, windowSeconds]);
   return <div className="model-dashboard">
     {error && <p className="monitor-notice" role="status">{error}</p>}
+    {latest && <InferenceDashboard inference={latest.inference} connected={connected} visible={visible} reduceMotion={reduceMotion} />}
     {latest?.gpus.map((gpu) => <section key={gpu.id} className="gpu-section"><header className="gpu-heading"><h2>{gpu.name}</h2><span>{error ? "数据暂不可用 · " : ""}每 {interval} 秒刷新 · {new Date(latest.timestamp * 1000).toLocaleTimeString()} · 最近 {windowSeconds / 60} 分钟</span></header><div className="metrics-grid">{metrics.map((metric) => <Trend key={metric.key} samples={samples} gpu={gpu} metric={metric} windowSeconds={windowSeconds} />)}</div></section>)}
     {!latest && !error && <p className="empty-hint">正在读取显卡…</p>}
     {latest && !latest.gpus.length && <p className="empty-hint">监测不可用不影响本地翻译。支持的数值恢复后会自动更新。</p>}
