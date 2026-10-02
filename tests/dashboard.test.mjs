@@ -27,6 +27,9 @@ test('GPU dashboard charts real samples, distinguishes unavailable data and stop
   try {
     await React.act(async () => root.render(React.createElement(ModelDashboard, { interval: .02 })));
     await React.act(async () => new Promise((r) => setTimeout(r, 55)));
+    assert.equal(document.querySelector('[role="tab"][aria-selected="true"]').textContent, '模型推理');
+    assert.equal(document.querySelector('.gpu-section'), null);
+    await React.act(async () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === 'GPU 硬件').click());
     assert.equal(document.querySelectorAll('svg[role="img"]').length, 4);
     assert.doesNotMatch(document.body.textContent, /GPU MONITOR|整卡实时数据，包含其他程序占用/);
     assert.match(document.querySelector('.gpu-heading').textContent, /最近 2 分钟/);

@@ -55,7 +55,7 @@ function metric(name) {
   return [...document.querySelectorAll('.inference-metric')].find((element) => element.querySelector('h3').textContent === name);
 }
 
-test('inference dashboard shows actual token counts, timings and bounded GGUF anatomy', async () => {
+test('inference dashboard shows token usage, timings, segment index and session totals without architecture controls', async () => {
   const h = await harness({ inference: snapshot() });
   try {
     assert.match(metric('生成速度').textContent, /38\.8tok\/s.*llama\.cpp 推理计时/);
@@ -65,20 +65,23 @@ test('inference dashboard shows actual token counts, timings and bounded GGUF an
     assert.match(metric('输入 tokens').textContent, /84/);
     assert.match(metric('首段输出延迟').textContent, /425 ms.*网关观测/);
     assert.match(metric('调用耗时').textContent, /3\.20 s/);
-    assert.match(document.querySelector('.inference-heading').textContent, /当前调用.*分段 1.*尝试 1/);
-    assert.match(document.querySelector('.inference-block-title').textContent, /× 32/);
-    assert.equal(document.querySelectorAll('.inference-layer').length, 4);
-    assert.match(document.querySelector('.inference-layer-note').textContent, /中间 28 层省略/);
-    assert.match(document.querySelector('.inference-attention').textContent, /16 Q \/ 4 KV heads/);
-    assert.match(document.querySelector('.inference-architecture-specs').textContent, /存储参数1\.80 B.*张量数量291.*8,192/);
-    assert.match(document.querySelector('.inference-architecture-specs [title]').title, /共享权重只统计一次/);
-    assert.equal(document.querySelector('.inference-architecture').dataset.motion, 'running');
-    assert.match(document.querySelector('.inference-visual-note').textContent, /每个生成 token 都经过全部 Transformer 层/);
+    assert.match(document.querySelector('.inference-heading').textContent, /当前调用.*分段 1.*尝试 1.*生成输出/);
     assert.match(document.querySelector('.inference-session-summary').textContent, /175tokens · 已知下限.*1 次调用统计不完整/);
+    assert.equal(document.querySelector('.inference-architecture'), null);
+    assert.equal(document.querySelector('.inference-motion-button'), null);
+    assert.equal(document.querySelector('.inference-stage-bar'), null);
+    assert.doesNotMatch(document.body.textContent, /真实计数|计算路径|架构剖面|暂停动画|继续动画/);
+    const complete = snapshot();
+    complete.active = null;
+    complete.latest = { ...record, status: 'completed', phase: 'idle', tokens_complete: true };
+    complete.summary.unknown_token_calls = 0;
+    await h.render({ inference: complete });
+    assert.match(metric('输入 tokens').textContent, /llama\.cpp token 用量/);
+    assert.match(document.querySelector('.inference-session-summary').textContent, /llama\.cpp token 用量/);
   } finally { await h.close(); }
 });
 
-test('unknown usage and interrupted calls retain missing values and gaps in real call trends', async () => {
+test('unknown usage and interrupted calls retain missing values and gaps in call trends', async () => {
   const data = snapshot();
   data.active = { ...record, prompt_tokens: null, generated_tokens: null, total_tokens: null, tokens_per_second: null, prompt_tokens_per_second: null, first_token_ms: null, token_source: 'unknown', speed_source: 'unknown' };
   data.history = [
@@ -100,86 +103,101 @@ test('unknown usage and interrupted calls retain missing values and gaps in real
   } finally { await h.close(); }
 });
 
-test('animation stops for pause, reduced motion, hidden page, disconnect, cancellation and a different model', async () => {
+test('inference phase distinguishes current, disconnected and terminal calls', async () => {
   const data = snapshot();
   const h = await harness({ inference: data });
-  const motion = () => document.querySelector('.inference-architecture').dataset.motion;
   try {
-    await h.React.act(async () => document.querySelector('.inference-motion-button').click());
-    assert.equal(motion(), 'stopped');
-    assert.equal(document.querySelector('.inference-motion-button').getAttribute('aria-pressed'), 'true');
-    await h.React.act(async () => document.querySelector('.inference-motion-button').click());
-    assert.equal(motion(), 'running');
-    await h.render({ inference: data, reduceMotion: true });
-    assert.equal(motion(), 'stopped');
-    assert.match(document.querySelector('.inference-stage-note').textContent, /减少动态效果已开启/);
-    await h.render({ inference: data, visible: false });
-    assert.equal(motion(), 'stopped');
     await h.render({ inference: data, connected: false });
-    assert.equal(motion(), 'stopped');
     assert.match(document.querySelector('.inference-heading').textContent, /上次观测.*状态待重新确认.*连接中断/);
     assert.doesNotMatch(document.querySelector('.inference-heading').textContent, /当前调用|推理中/);
+    assert.match(metric('调用耗时').textContent, /上次观测/);
     await h.render({ inference: { ...data, active: null, latest: { ...record, status: 'cancelled', phase: 'idle' } } });
-    assert.equal(motion(), 'stopped');
     assert.match(document.querySelector('.inference-heading').textContent, /已取消.*待命/);
-    await h.render({ inference: { ...data, active: { ...record, model: 'other-model' } } });
-    assert.equal(motion(), 'stopped');
-    assert.match(document.querySelector('.inference-stage-note').textContent, /当前调用与选中架构不同/);
-    await h.render({ inference: data });
-    assert.equal(motion(), 'running');
     await h.render({ inference: { ...data, active: { ...record, phase: 'prefill', first_token_ms: null } } });
-    assert.equal(motion(), 'running');
-    assert.equal(document.querySelector('.inference-architecture').dataset.phase, 'prefill');
-    assert.match(document.querySelector('li[aria-current="step"]').textContent, /等待首段输出/);
+    assert.match(document.querySelector('.inference-phase-pill').textContent, /等待首段输出/);
     assert.match(document.querySelector('.inference-stage-note').textContent, /并非实测 prefill 进度/);
   } finally { await h.close(); }
 });
 
-test('module inspection exposes accurate dense calculation explanations without implying live weight telemetry', async () => {
-  const h = await harness({ inference: snapshot() });
-  try {
-    await h.React.act(async () => document.querySelector('.inference-ffn').click());
-    assert.equal(document.querySelector('.inference-ffn').getAttribute('aria-pressed'), 'true');
-    assert.equal(document.querySelector('.inference-attention').getAttribute('aria-pressed'), 'false');
-    assert.match(document.querySelector('.inference-module-detail').textContent, /dense 矩阵计算.*纹理是装饰/);
-    await h.React.act(async () => document.querySelector('.inference-endpoint').click());
-    assert.match(document.querySelector('.inference-module-detail').textContent, /嵌入矩阵中查表/);
-    await h.React.act(async () => document.querySelector('.inference-output').click());
-    assert.match(document.querySelector('.inference-module-detail').textContent, /词表 logits.*文本片段与单个 token 并非一一对应/);
-    assert.match(document.querySelector('.inference-visual-note').textContent, /不代表逐层、逐参数活动/);
-  } finally { await h.close(); }
-});
-
-test('legacy gateway and unavailable architecture never fabricate model dimensions', async () => {
+test('legacy gateway leaves inference metrics unavailable without architecture dependencies', async () => {
   const h = await harness({});
   try {
     assert.match(document.body.textContent, /当前网关尚未提供推理指标/);
-    assert.equal(document.querySelector('.inference-anatomy'), null);
+    assert.equal(document.querySelector('.inference-metrics'), null);
     const data = snapshot();
-    data.architecture = { ...architecture, available: false, source: 'unavailable', architecture: null, name: null, block_count: null, expert_count: null, message: '未找到 GGUF 文件' };
+    delete data.architecture;
     await h.render({ inference: data });
-    assert.match(document.querySelector('.inference-architecture-empty').textContent, /未找到 GGUF 文件/);
-    assert.equal(document.querySelector('.inference-anatomy'), null);
-    assert.doesNotMatch(document.querySelector('.inference-architecture').textContent, /Dense Transformer|× 32|1\.80 B/);
+    assert.match(metric('生成速度').textContent, /38\.8/);
+    assert.equal(document.querySelector('.inference-architecture'), null);
   } finally { await h.close(); }
 });
 
-test('dashboard stops retained active animations on telemetry disconnection and page hiding', async () => {
+test('monitor tabs show one view and share a single telemetry poll with accessible keyboard navigation', async () => {
   const originalFetch = globalThis.fetch;
-  const data = snapshot();
-  globalThis.fetch = async () => Response.json({ timestamp: Date.now() / 1000, gpus: [], samples: [], interval: .01, message: '显卡监测暂不可用', inference: data });
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({ timestamp: Date.now() / 1000, gpus: [{ id: 'gpu', name: 'Tab test GPU', memory_used_mib: 1024, memory_total_mib: 8192, power_w: 50, power_limit_w: 100, utilization_pct: 15, temperature_c: 40 }], message: '', inference: snapshot() });
+  };
+  const h = await harness({ interval: 10 }, true);
+  try {
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    assert.equal(tabs.length, 2);
+    assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
+    assert.equal(tabs[0].tabIndex, 0);
+    assert.equal(tabs[1].tabIndex, -1);
+    assert.equal(document.querySelectorAll('[role="tabpanel"]:not([hidden])').length, 1);
+    assert.equal(document.querySelector('.gpu-section'), null);
+    assert.ok(document.querySelector('.inference-dashboard'));
+    for (const tab of tabs) {
+      const panel = document.getElementById(tab.getAttribute('aria-controls'));
+      assert.equal(panel.getAttribute('aria-labelledby'), tab.id);
+    }
+    await h.React.act(async () => tabs[1].click());
+    assert.ok(document.querySelector('.gpu-section'));
+    assert.equal(document.querySelector('.inference-dashboard'), null);
+    await h.React.act(async () => tabs[1].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
+    assert.equal(document.activeElement, tabs[0]);
+    assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
+    await h.React.act(async () => tabs[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true })));
+    assert.equal(document.activeElement, tabs[1]);
+    await h.React.act(async () => tabs[1].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
+    assert.equal(document.activeElement, tabs[0]);
+    await h.React.act(async () => tabs[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+    assert.equal(document.activeElement, tabs[1]);
+    assert.equal(document.querySelectorAll('[role="tabpanel"]:not([hidden])').length, 1);
+    assert.equal(calls, 1);
+  } finally { await h.close(); globalThis.fetch = originalFetch; }
+});
+
+test('dashboard preserves metrics on disconnect and resumes one poll after hiding aborts its request', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let signal;
+  globalThis.fetch = async (_url, options) => {
+    calls++;
+    signal = options.signal;
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+  };
   const h = await harness({ interval: .01 }, true);
   try {
-    assert.equal(document.querySelector('.inference-architecture').dataset.motion, 'running');
+    assert.equal(calls, 1);
     Object.defineProperty(document, 'hidden', { configurable: true, value: true });
     await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
-    assert.equal(document.querySelector('.inference-architecture').dataset.motion, 'stopped');
-    globalThis.fetch = async () => { throw new Error('offline'); };
+    assert.equal(signal.aborted, true);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(calls, 1);
+    globalThis.fetch = async () => { calls++; return Response.json({ timestamp: Date.now() / 1000, gpus: [], samples: [], message: '显卡监测暂不可用', inference: snapshot() }); };
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
     await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
+    assert.ok(document.querySelector('.inference-dashboard'));
+    assert.equal(document.querySelector('.monitor-notice'), null);
+    const restored = calls;
+    globalThis.fetch = async () => { calls++; throw new Error('offline'); };
     await h.React.act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
-    assert.equal(document.querySelector('.inference-architecture').dataset.motion, 'stopped');
+    assert.ok(calls > restored);
     assert.match(document.querySelector('.inference-heading').textContent, /状态待重新确认/);
     assert.match(document.querySelector('.monitor-notice').textContent, /监测连接中断/);
+    assert.match(metric('输入 tokens').textContent, /84/);
   } finally { await h.close(); globalThis.fetch = originalFetch; }
 });
