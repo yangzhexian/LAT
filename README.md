@@ -4,7 +4,7 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.2.1-beta.3`（本地复验版）
+> 当前版本：`0.2.1-beta.4`（本地复验版）
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
@@ -29,7 +29,8 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 - 翻译过程中显示推理进度和整数 tokens/s，完成后保留最终速度、耗时和生成 token 数
 - 从应用启动持续采集 NVIDIA 整卡显存、利用率、功率和温度；模型页查看趋势，支持 0.5/1/2/5 秒采样及最近 1/2/5 分钟范围，切页和隐藏窗口不断采，退出后清空
 - 模型页展示推理输入/输出/总 token、生成及输入处理速度、首 token 延迟、耗时和本次网关会话的累计用量；质量重试与长文分段分别计入实际模型调用，缺失的后端数据明确显示未知
-- 从本地 GGUF 读取模型架构，提供可点选的模块说明、层堆叠和随推理阶段变化的光流动画；动画是计算路径示意，不代表逐参数或逐层实测活动，并支持暂停与减少动态效果
+- 模型页通过“模型推理 / GPU 硬件”选项卡选择看板；模型与架构页使用外侧页面滚动，避免嵌套滚动条
+- 左侧“模型架构”独立入口展示本地 GGUF 的总览，可放大查看任意 Transformer 层、Attention/KV heads、FFN、Embedding 和 Output；分步骤教学动画支持播放、暂停和减少动态效果，每层可查看 GGUF 存储张量形状，动画不表示实际权重或逐参数活动
 - 关闭模型时终止 LAT 管理的 llama-server 并释放显存
 - 提供 OpenAI 兼容接口，可供 nextai-translator 等客户端调用
 
@@ -46,7 +47,7 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 
 固定浮窗后再次划词会更新原文和译文，并保留你调整后的窗口位置与尺寸；取消固定后恢复跟随新选区定位。
 
-推理看板的数据口径、架构动画与复验项目见 [beta.3 发布说明](docs/releases/v0.2.1-beta.3.md) 和 [推理看板设计](docs/design/inference-dashboard.md)。
+本版变化与复验项目见 [beta.4 发布说明](docs/releases/v0.2.1-beta.4.md)、[模型架构浏览设计](docs/design/model-architecture.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md)。
 
 beta.1 的用户验收记录已保留；beta.2 修复浮标首次点击、鼠标延迟与浮窗圆角，等待针对这些问题复验。兼容性记录见 [划词翻译验收清单](docs/acceptance/lat-selection-translation-checklist.md)，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
 
