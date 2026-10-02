@@ -51,7 +51,7 @@ export function teachingSteps(level: ArchitectureLevel, dense: boolean): Teachin
       { name: "注意力", description: "Q/K/V 投影结合当前表示和历史上下文，输出上下文相关的表示。点击注意力模块继续放大。" },
       { name: "第一条残差", description: "注意力输出与保留的本层输入相加，然后进入前馈路径前的归一化。" },
       { name: "前馈变换", description: dense ? "密集前馈网络进行 gate/up 投影、激活与门控相乘，再 down 投影回隐藏维度。点击前馈模块查看。" : "通用前馈示意：中间表示经过非线性变换，再返回隐藏维度；具体分支未确认。" },
-      { name: "第二条残差", description: "前馈结果加回其输入，成为后续层的输入。这是结构演示，不包含真实张量值。" },
+      { name: "第二条残差", description: "前馈结果加回第一条残差的输出，即第二次归一化前保留的隐藏表示，成为后续层的输入。这是结构演示，不包含真实张量值。" },
     ];
     case "attention": return [
       { name: "Q/K/V 投影", description: "同一隐藏表示分别经过 Query、Key、Value 投影。头数来自本地元数据；下方可选择任意 Query head 查看分组。" },
@@ -61,10 +61,10 @@ export function teachingSteps(level: ArchitectureLevel, dense: boolean): Teachin
       { name: "合并与投影", description: "各 Query head 的结果合并，并经输出投影返回隐藏维度，再回到本层残差连接。" },
     ];
     case "ffn": return dense ? [
-      { name: "双路投影", description: "隐藏表示分别进入 gate_proj 与 up_proj，扩展到前馈中间维度。矩阵纹理仅为示意。" },
+      { name: "双路投影", description: "残差 1 的输出先进行 RMSNorm，归一化后的隐藏表示分别进入 gate_proj 与 up_proj，扩展到前馈中间维度。矩阵纹理仅为示意。" },
       { name: "激活与门控", description: "gate 分支经过配置的激活函数，再与 up 分支逐元素相乘。此页未读取具体激活函数类型。" },
       { name: "返回隐藏维度", description: "down_proj 将中间表示投影回隐藏维度。这里使用密集矩阵计算，没有展示或模拟 MoE 专家选择。" },
-      { name: "接回残差", description: "变换结果回到本层，与前馈输入相加。此动画是演示，未读取任何权重或激活值。" },
+      { name: "接回残差", description: "变换结果与归一化前保留的隐藏表示（残差 1 的输出）相加。此动画是演示，未读取任何权重或激活值。" },
     ] : [
       { name: "输入投影", description: "通用前馈示意：将隐藏表示变换为中间表示。具体网络分支尚未确认。" },
       { name: "非线性处理", description: "非线性处理增强表示能力；具体激活函数未读取，不将示意曲线当作模型配置。" },

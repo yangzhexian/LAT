@@ -45,7 +45,7 @@ const telemetry = (architecture) => ({ timestamp: Date.now() / 1000, message: ''
 
 test('all actual layers drill into Attention and FFN, restore breadcrumbs, and focus the new view', async () => {
   const architecture = fixture();
-  const h = await harness({ architecture });
+  const h = await harness({ architecture, reduceMotion: true });
   try {
     assert.equal(document.querySelectorAll('.ma-layer-tile').length, 32);
     assert.match(document.querySelector('.ma-layer-bank').textContent, /32 个真实层.*Dense Decoder/);
@@ -55,6 +55,7 @@ test('all actual layers drill into Attention and FFN, restore breadcrumbs, and f
     assert.match(document.querySelector('.ma-breadcrumb').textContent, /模型框架.*第 32 层/);
     assert.equal(document.activeElement, document.querySelector('.ma-canvas-heading h2'));
     assert.equal(h.scrolls(), 1);
+    await h.React.act(async () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === '张量列表').click());
     assert.equal(document.querySelectorAll('.ma-tensors tbody tr').length, 2);
     assert.match(document.querySelector('.ma-tensors').textContent, /14,336 × 4,096.*GGUF 原生存储顺序/);
     await h.click('.ma-layer-attention');
@@ -67,6 +68,7 @@ test('all actual layers drill into Attention and FFN, restore breadcrumbs, and f
     assert.equal(document.querySelectorAll('.ma-head-grid [data-group="true"]').length, 4);
     await h.React.act(async () => { const select = document.querySelector('.ma-layer-select select'); select.value = '2'; select.dispatchEvent(new window.Event('change', { bubbles: true })); });
     assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 2 层/);
+    await h.React.act(async () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === '张量列表').click());
     assert.match(document.querySelector('.ma-tensors').textContent, /blk\.1\.attn_q\.weight/);
     await h.React.act(async () => document.querySelectorAll('.ma-breadcrumb button')[1].click());
     await h.click('.ma-layer-ffn');
