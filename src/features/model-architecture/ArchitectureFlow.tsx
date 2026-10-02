@@ -32,8 +32,13 @@ export function connectionPath(edge: FlowEdge, rectangles: Record<string, FlowRe
   const from = rectangles[edge.from];
   const to = rectangles[edge.to];
   if (!from || !to) return "";
-  const source = edge.source ?? "right";
-  const target = edge.target ?? "left";
+  const automatic = !edge.source && !edge.target && (!edge.route || edge.route === "auto");
+  const overlapX = from.left < to.left + to.width && to.left < from.left + from.width;
+  const below = from.top + from.height <= to.top;
+  const above = to.top + to.height <= from.top;
+  const stacked = automatic && overlapX && (below || above);
+  const source = edge.source ?? (stacked ? below ? "bottom" : "top" : "right");
+  const target = edge.target ?? (stacked ? below ? "top" : "bottom" : "left");
   const start = anchor(from, source);
   const end = anchor(to, target);
   const bounds = Object.values(rectangles);

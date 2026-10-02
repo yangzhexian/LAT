@@ -36,9 +36,9 @@ function Overview({ architecture, step, navigate, pullingLayer }: { architecture
   const actual = actualLayerCount(architecture);
   const container = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
-  const [columns, setColumns] = useState(() => window.innerWidth <= 760 ? 4 : 8);
+  const [columns, setColumns] = useState(() => window.innerWidth <= 1100 ? 4 : 8);
   useLayoutEffect(() => {
-    const update = () => { if (grid.current) setColumns(Number(window.getComputedStyle(grid.current).getPropertyValue("--book-columns")) || (window.innerWidth <= 760 ? 4 : 8)); };
+    const update = () => { if (grid.current) setColumns(Number(window.getComputedStyle(grid.current).getPropertyValue("--book-columns")) || (window.innerWidth <= 1100 ? 4 : 8)); };
     update();
     const observer = typeof window.ResizeObserver === "function" ? new window.ResizeObserver(update) : null;
     if (grid.current) observer?.observe(grid.current);

@@ -72,7 +72,7 @@ test('bookshelf preserves all layer connections through eight and four column sn
   try {
     assert.equal(document.querySelectorAll('.ma-book-circuit').length, 32);
     assertPortsExist();
-    for (const [width, columns] of [[1024, 8], [700, 4]]) {
+    for (const [width, columns] of [[1320, 8], [900, 4]]) {
       window.innerWidth = width;
       await h.React.act(async () => window.dispatchEvent(new window.Event('resize')));
       const first = document.querySelector('[data-flow-node="book-1"]');
@@ -82,6 +82,15 @@ test('bookshelf preserves all layer connections through eight and four column sn
       assert.equal(nextRow.style.gridRow, '2');
     }
   } finally { await h.close(); }
+});
+
+test('automatic connections follow stacked compact nodes without changing explicit residual ports', async () => {
+  const { connectionPath } = await load();
+  const rectangles = { activation: { left: 50, top: 20, width: 100, height: 60 }, down: { left: 40, top: 120, width: 120, height: 100 } };
+  assert.equal(connectionPath({ id: 'compact-ffn', from: 'activation', to: 'down' }, rectangles), 'M100,80 V100 H100 V120', 'compact activation exits below and enters down projection from above');
+  assert.equal(connectionPath({ id: 'upward', from: 'down', to: 'activation' }, rectangles), 'M100,120 V100 H100 V80');
+  assert.equal(connectionPath({ id: 'explicit-residual', from: 'activation', to: 'down', source: 'left', target: 'left', route: 'left', kind: 'residual', offset: 10 }, rectangles), 'M50,50 H30 V170 H40', 'explicit side ports remain intact');
+  assert.equal(connectionPath({ id: 'wide', from: 'activation', to: 'down' }, { ...rectangles, down: { left: 200, top: 20, width: 120, height: 60 } }), 'M150,50 H175 V50 H200', 'wide layouts keep horizontal ports');
 });
 
 test('layer main route and both residuals join the actual sum nodes', async () => {
