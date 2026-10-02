@@ -8,6 +8,7 @@ from typing import Any, Iterator
 
 from .config import Settings
 from .errors import LlamaError, LlamaHTTPError
+from .inference_telemetry import response_metrics
 
 
 class LlamaServerClient:
@@ -16,6 +17,7 @@ class LlamaServerClient:
     def __init__(self, base_url: str, settings: Settings):
         self.base_url = base_url.rstrip("/")
         self.settings = settings
+        self.model = settings.model_name
 
     def _request(
         self,
@@ -63,7 +65,7 @@ class LlamaServerClient:
             return False
 
     def resolve_model(self) -> str:
-        return self.settings.model_name
+        return self.model
 
     def chat(
         self,
@@ -87,13 +89,12 @@ class LlamaServerClient:
         first_choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
         message = first_choice.get("message")
         content = message.get("content", "") if isinstance(message, dict) else ""
-        usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
-        timings = response.get("timings") if isinstance(response.get("timings"), dict) else {}
-        predicted_ms = timings.get("predicted_ms")
+        metrics = response_metrics(response)
         return {
             "message": {"content": content if isinstance(content, str) else ""},
-            "eval_count": usage.get("completion_tokens"),
-            "eval_duration": predicted_ms * 1_000_000 if isinstance(predicted_ms, (int, float)) else None,
+            "eval_count": metrics["generated_tokens"],
+            "eval_duration": metrics["decode_ms"] * 1_000_000 if metrics["decode_ms"] is not None else None,
+            "inference_metrics": metrics,
             "done_reason": first_choice.get("finish_reason"),
         }
 
@@ -108,6 +109,7 @@ class LlamaServerClient:
             "messages": messages,
             "stream": True,
             "stream_options": {"include_usage": True},
+            "timings_per_token": True,
             "temperature": options.get("temperature", 0.7),
             "top_p": options.get("top_p", 0.6),
             "top_k": options.get("top_k", 20),
@@ -125,6 +127,7 @@ class LlamaServerClient:
         try:
             with urllib.request.urlopen(request, timeout=self.settings.request_timeout_seconds) as response:
                 usage: dict[str, Any] = {}
+                timings: dict[str, Any] = {}
                 done_reason: str | None = None
                 done_emitted = False
                 for raw_line in response:
@@ -135,10 +138,13 @@ class LlamaServerClient:
                     if data == "[DONE]":
                         if done_reason is None:
                             raise LlamaError("incomplete_stream: 模型未报告终止原因")
+                        metrics = response_metrics({"usage": usage, "timings": timings})
                         yield {
                             "done": True,
                             "done_reason": done_reason,
-                            "eval_count": usage.get("completion_tokens"),
+                            "eval_count": metrics["generated_tokens"],
+                            "eval_duration": metrics["decode_ms"] * 1_000_000 if metrics["decode_ms"] is not None else None,
+                            "inference_metrics": metrics,
                         }
                         done_emitted = True
                         break
@@ -149,24 +155,34 @@ class LlamaServerClient:
                     if not isinstance(event, dict):
                         continue
                     if isinstance(event.get("usage"), dict):
-                        usage = event["usage"]
+                        usage.update(event["usage"])
+                    if isinstance(event.get("timings"), dict):
+                        timings.update(event["timings"])
+                    metrics = response_metrics({"usage": usage, "timings": timings})
                     choices = event.get("choices")
                     if not isinstance(choices, list) or not choices:
+                        if event.get("usage") or event.get("timings"):
+                            yield {"inference_metrics": metrics}
                         continue
                     choice = choices[0] if isinstance(choices[0], dict) else {}
                     delta = choice.get("delta") if isinstance(choice, dict) else {}
                     content = delta.get("content", "") if isinstance(delta, dict) else ""
                     if isinstance(content, str) and content:
-                        yield {"message": {"content": content}}
+                        yield {"message": {"content": content}, "inference_metrics": metrics}
+                    elif event.get("usage") or event.get("timings"):
+                        yield {"inference_metrics": metrics}
                     if isinstance(choice.get("finish_reason"), str):
                         done_reason = choice["finish_reason"]
                 if not done_emitted:
                     if done_reason is None:
                         raise LlamaError("incomplete_stream: 模型连接提前结束，未收到完成确认")
+                    metrics = response_metrics({"usage": usage, "timings": timings})
                     yield {
                         "done": True,
                         "done_reason": done_reason,
-                        "eval_count": usage.get("completion_tokens"),
+                        "eval_count": metrics["generated_tokens"],
+                        "eval_duration": metrics["decode_ms"] * 1_000_000 if metrics["decode_ms"] is not None else None,
+                        "inference_metrics": metrics,
                     }
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")

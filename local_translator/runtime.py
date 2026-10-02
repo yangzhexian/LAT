@@ -336,13 +336,14 @@ class LlamaCppProcessManager:
                     },
                 }
             )
-        active = next((item for item in models if item["name"] == selected.id), None)
+        active_model = self.client.resolve_model() if ready and self.client is not None else None
+        active = next((item for item in models if item["name"] == active_model), None)
         result: dict[str, Any] = {
             "backend": "llama.cpp",
             "ready": ready,
             "owned_process": process_running,
             "model_configured": selected.id,
-            "active_model": selected.id if ready else None,
+            "active_model": active_model,
             "resolved_model": selected.id,
             "version": self.settings.llama_release,
             "runtime": {

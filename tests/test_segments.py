@@ -71,6 +71,7 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(progress, sorted(progress))
         self.assertEqual(progress[-1], len(source))
         self.assertEqual(manager.client.calls, 1)  # identical paragraphs reuse this request's result
+        self.assertEqual(engine.inference.snapshot()["summary"]["calls"], 1)
         self.assertEqual(manager.client.closed, manager.client.calls)
         self.assertEqual(engine.translate({"text": source, "target_language": "English"}).text, source)
 
@@ -130,6 +131,10 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(manager.client.calls, 3)
         list(engine.translate_stream(dict(body, job_id=plan["job_id"])))
         self.assertEqual(manager.client.calls, 3)
+        snapshot = engine.inference.snapshot()
+        self.assertEqual(snapshot["summary"]["calls"], 3)
+        self.assertEqual([record["segment_index"] for record in snapshot["history"]], [1, 2, 3])
+        self.assertTrue(all(record["job_id"] == plan["job_id"] for record in snapshot["history"]))
 
     def test_cancel_preserves_checkpoint_and_changed_input_is_rejected(self):
         manager = Manager()

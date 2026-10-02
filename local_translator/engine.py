@@ -17,6 +17,7 @@ from .quality import clean_model_output, is_fatal, protect_text, quality_issues
 from .runtime import LlamaCppProcessManager
 from .jobs import TranslationCancelled, TranslationJob
 from .segments import split_source, token_cost
+from .inference_telemetry import InferenceTelemetry
 
 
 class TranslationRequestError(ValueError):
@@ -48,6 +49,7 @@ class TranslationEngine:
         self._translation_lock = threading.Lock()
         self._jobs: dict[str, TranslationJob] = {}
         self._active_job: TranslationJob | None = None
+        self.inference = InferenceTelemetry()
 
     def _options(self, retry: bool = False) -> dict[str, Any]:
         return {
@@ -300,10 +302,13 @@ class TranslationEngine:
             options["max_tokens"] = min(self.settings.max_output_tokens, self.settings.num_ctx - token_cost(current_prompt) - 256)
             if options["max_tokens"] < 32:
                 raise TranslationOutputError("context_budget: 当前分段没有足够的输出预算")
-            stream = client.chat_stream(
+            stream = self._tracked_stream(
+                client,
                 model,
                 [{"role": "user", "content": current_prompt}],
                 options,
+                attempt + 1,
+                cancel,
             )
             with closing(stream):
                 for event in stream:
@@ -356,3 +361,22 @@ class TranslationEngine:
                 yield {"type": "retry", "issues": issues}
 
         raise TranslationOutputError(f"流式模型输出未通过结果校验: {issues}")
+
+    def _tracked_stream(self, client, model, messages, options, attempt, cancel):
+        job = self._active_job
+        call_id = self.inference.begin(model, job_id=job.id if job else None,
+                                       segment_index=len(job.completed) + 1 if job else None, attempt=attempt)
+        status = "failed"
+        try:
+            with closing(client.chat_stream(model, messages, options)) as stream:
+                for event in stream:
+                    self.inference.observe(call_id, event)
+                    if cancel is not None and cancel.is_set():
+                        raise TranslationCancelled()
+                    yield event
+            status = "completed"
+        except (TranslationCancelled, GeneratorExit):
+            status = "cancelled"
+            raise
+        finally:
+            self.inference.finish(call_id, status)

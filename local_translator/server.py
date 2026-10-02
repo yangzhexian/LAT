@@ -17,6 +17,7 @@ from .engine import TranslationEngine, TranslationOutputError, TranslationReques
 from .errors import DownloadCancelled, LlamaError
 from .version import __version__
 from .telemetry import GpuTelemetry
+from .model_metadata import ArchitectureMetadataCache
 
 
 LOGGER = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class App:
         self.settings = settings
         self.engine = TranslationEngine(settings)
         self.telemetry = GpuTelemetry()
+        self.architecture = ArchitectureMetadataCache()
         self.httpd: ThreadingHTTPServer | None = None
 
     def stop(self) -> None:
@@ -111,7 +113,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"status": "ok", "service": "lat-local-translator"})
                 return
             if self.path == "/admin/telemetry":
-                self._json(200, self.app.telemetry.snapshot())
+                inference = self.app.engine.inference.snapshot()
+                inference["architecture"] = self.app.architecture.snapshot(
+                    self.app.settings.resolved_model_path, self.app.settings.model_name)
+                self._json(200, {**self.app.telemetry.snapshot(), "inference": inference})
                 return
             if self.path == "/admin/status":
                 self._json(200, {**self.app.engine.manager.status(), "max_input_chars": self.app.settings.max_input_chars})

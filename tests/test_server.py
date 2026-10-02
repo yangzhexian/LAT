@@ -109,7 +109,11 @@ class ServerTests(unittest.TestCase):
         sample = {"timestamp": 1, "gpus": [{"id": "gpu", "power_w": None}], "message": ""}
         self.httpd.app.telemetry.snapshot = Mock(return_value=sample)
         with urllib.request.urlopen(self.url + "/admin/telemetry") as response:
-            self.assertEqual(json.loads(response.read()), sample)
+            result = json.loads(response.read())
+            self.assertEqual({key: result[key] for key in sample}, sample)
+            self.assertIsNone(result["inference"]["active"])
+            self.assertEqual(result["inference"]["summary"]["calls"], 0)
+            self.assertEqual(result["inference"]["architecture"]["model"], self.httpd.app.settings.model_name)
 
     def test_translation_cancel_endpoint(self):
         engine = self.httpd.app.engine
