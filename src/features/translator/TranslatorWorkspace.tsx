@@ -1,4 +1,5 @@
 import { ModelDashboard } from "../model-monitor/ModelDashboard";
+import { ModelArchitecturePage } from "../model-architecture/ModelArchitecturePage";
 import { Button, DangerButton } from "../../components/Controls";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cancelTranslation, translateStream } from "../../lib/api";
@@ -66,8 +67,8 @@ export function TranslatorWorkspace({
   const [sourcePreview, setSourcePreview] = useState(false);
   const [targetPreview, setTargetPreview] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [page, setPage] = useState<"translate" | "history" | "settings" | "model">(status.ready ? "translate" : "model");
-  useEffect(() => { setPage(status.ready ? "translate" : "model"); }, [status.ready]);
+  const [page, setPage] = useState<"translate" | "history" | "settings" | "model" | "architecture">(status.ready ? "translate" : "model");
+  useEffect(() => { setPage((current) => current === "architecture" ? current : status.ready ? "translate" : "model"); }, [status.ready]);
   const [history, setHistory] = useState<TranslationHistory[]>([]);
   const [historyError, setHistoryError] = useState("");
   const historyPreferences = useRef(settings);
@@ -221,16 +222,16 @@ export function TranslatorWorkspace({
     : "准备中";
 
   return (
-    <main className="translator-screen">
+    <main className="translator-screen" data-page={page}>
       <nav className="side-nav" aria-label="主导航">
         <span className="nav-brand">LAT</span>
-        {([['translate', 'translate', '翻译'], ['history', 'history', '历史记录'], ['model', 'model', '模型'], ['settings', 'settings', '设置']] as const).map(([id, icon, label]) => (
+        {([['translate', 'translate', '翻译'], ['history', 'history', '历史记录'], ['model', 'model', '模型'], ['architecture', 'architecture', '模型架构'], ['settings', 'settings', '设置']] as const).map(([id, icon, label]) => (
           <Button key={id} className={page === id ? "nav-item active" : "nav-item"} aria-label={label} title={label} aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}><Icon name={icon as IconName} /><span className="nav-tooltip">{label}</span></Button>
         ))}
       </nav>
       <header className="app-header">
         <div className="brand">
-          <span>{{ translate: "翻译工作区", history: "翻译历史", model: "本地模型", settings: "偏好设置" }[page]}<small>Local AI Translator</small></span>
+          <span>{{ translate: "翻译工作区", history: "翻译历史", model: "本地模型", architecture: "模型架构", settings: "偏好设置" }[page]}<small>Local AI Translator</small></span>
         </div>
         <div className="active-model">
           <span className={"status-dot " + (status.ready ? "ready" : "")} />
@@ -243,6 +244,7 @@ export function TranslatorWorkspace({
       </header>
       {modelError && <div className="model-error" role="alert">{modelError}</div>}
       {page === "model" && <section className="model-page">{status.ready ? <ModelDashboard interval={settings.telemetryInterval} windowSeconds={settings.telemetryWindow} reduceMotion={settings.reduceMotion} /> : setupContent}</section>}
+      {page === "architecture" && <section className="architecture-page"><ModelArchitecturePage interval={settings.telemetryInterval} reduceMotion={settings.reduceMotion} /></section>}
       <div className="translation-page" hidden={page !== "translate"}>
       <div className="workspace-status" role="status">
         {busy || canResume ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段 · ${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}% · ${message}` : message}

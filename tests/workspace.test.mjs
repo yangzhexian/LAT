@@ -2,9 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { JSDOM } from 'jsdom';
 import 'fake-indexeddb/auto';
+
+async function bundleWorkspace(outfile) {
+  await build({
+    entryPoints: ['src/features/translator/TranslatorWorkspace.tsx'], outfile, bundle: true, platform: 'node',
+    format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' },
+    plugins: [{
+      name: 'workspace-model-page-fixtures',
+      setup(builder) {
+        builder.onResolve({ filter: /\/(ModelArchitecturePage|ModelDashboard)$/ }, ({ path }) => ({ path: path.split('/').at(-1), namespace: 'model-page-fixture' }));
+        builder.onLoad({ filter: /.*/, namespace: 'model-page-fixture' }, ({ path }) => ({
+          loader: 'tsx', resolveDir: resolve('.'), contents: `export function ${path}({ interval, reduceMotion }) {
+            return <div data-model-page="${path}" data-interval={interval} data-reduce-motion={String(reduceMotion)}>Local model page</div>;
+          }`,
+        }));
+      },
+    }],
+  });
+  return import(pathToFileURL(resolve(outfile)).href);
+}
 
 test('workspace retains text across navigation, disables conflicts while translating, and shows completed sections', async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost' });
@@ -15,8 +35,7 @@ test('workspace retains text across navigation, disables conflicts while transla
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
   const React = await import('react');
   const { createRoot } = await import('react-dom/client');
-  await build({ entryPoints: ['src/features/translator/TranslatorWorkspace.tsx'], outfile: 'artifacts/validation/workspace-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' } });
-  const { TranslatorWorkspace } = await import(pathToFileURL(resolve('artifacts/validation/workspace-test.mjs')).href);
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-test.mjs');
   const root = createRoot(document.getElementById('root'));
   let disabled = 0;
   const props = { status: { ready: true, model_configured: 'test-model', backend: 'llama.cpp' }, settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, dataDirectory: '' }, onSettingsChange() {}, onDisable() { disabled++; } };
@@ -106,4 +125,83 @@ test('workspace retains text across navigation, disables conflicts while transla
     await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, selectionBusy: true })));
     assert.equal(document.querySelector('.header-action .danger-button').disabled, true);
   } finally { await React.act(async () => root.unmount()); globalThis.fetch = originalFetch; dom.window.close(); }
+});
+
+test('architecture navigation works with the model off and long model pages use document scrolling', async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  const style = document.createElement('style');
+  style.textContent = await readFile('src/styles.css', 'utf8');
+  document.head.append(style);
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-navigation-test.mjs');
+  const root = createRoot(document.getElementById('root'));
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => { requests.push(url); throw new Error('navigation must not start a model'); };
+  let disabled = 0;
+  const props = {
+    status: { ready: false, model_configured: 'local-model', backend: 'llama.cpp' },
+    settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, dataDirectory: '', telemetryInterval: 5, reduceMotion: true },
+    setupContent: React.createElement('div', { 'data-model-setup': true }, 'Model setup'),
+    onSettingsChange() {}, onDisable() { disabled++; },
+  };
+  const click = async (label) => React.act(async () => document.querySelector(`.side-nav [aria-label="${label}"]`).click());
+  const assertDocumentLayout = (page) => {
+    const screen = dom.window.getComputedStyle(document.querySelector('.translator-screen'));
+    const content = dom.window.getComputedStyle(document.querySelector(`.${page}-page`));
+    assert.equal(screen.height, 'auto');
+    assert.equal(parseFloat(screen.minHeight), dom.window.innerHeight);
+    assert.equal(content.overflow, 'visible', 'model content must grow instead of scrolling inside a constrained container');
+  };
+  try {
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, props)));
+    assert.ok(document.querySelector('[data-model-setup]'));
+    assertDocumentLayout('model');
+    await click('模型架构');
+    assert.equal(document.querySelector('.translator-screen').dataset.page, 'architecture');
+    assert.equal(document.querySelector('.side-nav [aria-label="模型架构"]').getAttribute('aria-current'), 'page');
+    assert.match(document.querySelector('.brand').textContent, /^模型架构/);
+    const architecture = document.querySelector('[data-model-page="ModelArchitecturePage"]');
+    assert.equal(architecture.dataset.interval, '5');
+    assert.equal(architecture.dataset.reduceMotion, 'true');
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, true);
+    assertDocumentLayout('architecture');
+    const readyProps = { ...props, status: { ...props.status, ready: true } };
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, readyProps)));
+    assert.equal(document.querySelector('.translator-screen').dataset.page, 'architecture', 'model readiness must not interrupt architecture browsing');
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, false);
+    await click('翻译');
+    const source = document.querySelector('textarea[aria-label="原文"]');
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set.call(source, 'Keep this source through navigation.');
+      source.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+    assert.equal(parseFloat(dom.window.getComputedStyle(document.querySelector('.translator-screen')).height), dom.window.innerHeight);
+    assert.equal(dom.window.getComputedStyle(source).overflow, 'auto', 'long input keeps its local scroll');
+    await click('模型架构');
+    await click('模型');
+    assert.ok(document.querySelector('[data-model-page="ModelDashboard"]'));
+    assert.equal(document.querySelector('[data-model-setup]'), null);
+    assertDocumentLayout('model');
+    await click('历史记录');
+    assert.equal(dom.window.getComputedStyle(document.querySelector('.history-page')).overflow, 'auto');
+    await click('设置');
+    assert.equal(dom.window.getComputedStyle(document.querySelector('.settings-page')).overflow, 'auto');
+    await click('翻译');
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, 'Keep this source through navigation.');
+    await click('模型架构');
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, props)));
+    assert.equal(document.querySelector('.translator-screen').dataset.page, 'architecture');
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, true);
+    await click('模型');
+    assert.ok(document.querySelector('[data-model-setup]'));
+    assert.deepEqual(requests, []);
+    assert.equal(disabled, 0);
+  } finally {
+    await React.act(async () => root.unmount());
+    globalThis.fetch = originalFetch;
+    dom.window.close();
+  }
 });
