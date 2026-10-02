@@ -418,6 +418,15 @@ fn show_bubble(app: &tauri::AppHandle, point: (i32, i32)) -> Result<(), String> 
         .map_err(|error| format!("划词浮标无法显示：{error}"))
 }
 
+fn present_popup(pinned: bool, position: impl FnOnce(), show: impl FnOnce()) {
+    // Positioning also fits the popup size to the selection's monitor. A pinned
+    // popup belongs to the user's chosen location and must retain both values.
+    if !pinned {
+        position();
+    }
+    show();
+}
+
 fn publish(
     app: &tauri::AppHandle,
     inner: &Arc<Inner>,
@@ -439,9 +448,14 @@ fn publish(
     *inner.snapshot.lock().unwrap() = Some(snapshot.clone());
     hide_bubble(app);
     if let Some(window) = app.get_webview_window("selection") {
-        position_window(&window, point, false);
-        let _ = window.show();
-        let _ = window.set_focus();
+        present_popup(
+            inner.pinned.load(Ordering::Acquire),
+            || position_window(&window, point, false),
+            || {
+                let _ = window.show();
+                let _ = window.set_focus();
+            },
+        );
     }
     let _ = app.emit_to("selection", "selection-ready", snapshot);
 }
@@ -627,6 +641,27 @@ pub async fn selection_copy(window: tauri::WebviewWindow, text: String) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn new_selections_preserve_pinned_geometry_and_resume_following_after_unpinning() {
+        let geometry = Cell::new(((120, 80), (520, 400)));
+        let presentations = Cell::new(0);
+        let show = || presentations.set(presentations.get() + 1);
+
+        // New selections can come from another monitor, where positioning would
+        // also fit the popup to a different work area. Keep the user's geometry.
+        for next_geometry in [((-1700, 200), (440, 360)), ((2600, 900), (340, 260))] {
+            present_popup(true, || geometry.set(next_geometry), show);
+            assert_eq!(geometry.get(), ((120, 80), (520, 400)));
+        }
+        assert_eq!(presentations.get(), 2);
+
+        present_popup(false, || geometry.set(((900, 300), (440, 360))), show);
+        assert_eq!(geometry.get(), ((900, 300), (440, 360)));
+        assert_eq!(presentations.get(), 3);
+    }
+
     #[test]
     fn blur_only_dismisses_the_same_unpinned_popup_after_external_activation() {
         assert!(should_dismiss_on_blur(false, "42", Some("42"), Some(false)));
