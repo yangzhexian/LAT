@@ -14,11 +14,11 @@ function TensorMatrix({ tensor }: { tensor: BlockTensor }) {
   const layout = matrixLayout(tensor.shape);
   const dimensions = tensor.shape.map(formatNumber).join(" × ");
   if (!layout) return <div className="ma-weight-matrix-unknown">存储形状未知</div>;
-  return <figure className="ma-weight-blueprint" aria-label={`${tensor.name}，存储形状 ${dimensions}，结构分块示意，不包含权重数值`}>
+  return <figure className="ma-weight-blueprint" style={{ "--weight-ratio": layout.ratio } as CSSProperties} aria-label={`${tensor.name}，存储形状 ${dimensions}，结构分块示意，不包含权重数值`}>
     <div className="ma-weight-axis ma-weight-axis-top"><span>存储轴 1</span><strong>{formatNumber(tensor.shape[0])}</strong></div>
     <div className="ma-weight-grid-wrap">
       <div className="ma-weight-axis ma-weight-axis-side"><span>{layout.vector ? "参数向量" : "存储轴 2"}</span>{!layout.vector && <strong>{formatNumber(tensor.shape[1])}</strong>}</div>
-      <div className="ma-weight-grid" data-vector={layout.vector} style={{ "--weight-columns": layout.columns, "--weight-ratio": layout.ratio } as CSSProperties} aria-hidden="true">
+      <div className="ma-weight-grid" data-vector={layout.vector} style={{ "--weight-columns": layout.columns } as CSSProperties} aria-hidden="true">
         {Array.from({ length: layout.columns * layout.rows }, (_, index) => <i key={index} />)}
       </div>
     </div>
