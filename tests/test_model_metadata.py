@@ -13,11 +13,13 @@ def gguf_string(value, endian="<"):
     return struct.pack(endian + "Q", len(raw)) + raw
 
 
-def gguf_fixture(endian="<"):
+def gguf_fixture(endian="<", *, extra_metadata=None, tensors=None):
     metadata = {"general.architecture": "hunyuan-dense", "general.name": "local test model", "general.file_type": 18,
                 "hunyuan-dense.block_count": 28, "hunyuan-dense.embedding_length": 4096,
                 "hunyuan-dense.attention.head_count": 32, "hunyuan-dense.attention.head_count_kv": 8}
-    data = b"GGUF" + struct.pack(endian + "IQQ", 3, 2, len(metadata) + 1)
+    metadata.update(extra_metadata or {})
+    tensors = tensors if tensors is not None else (("token_embd.weight", (16, 32)), ("blk.0.attn.weight", (4, 8)))
+    data = b"GGUF" + struct.pack(endian + "IQQ", 3, len(tensors), len(metadata) + 1)
     for key, value in metadata.items():
         data += gguf_string(key, endian)
         if isinstance(value, str):
@@ -26,7 +28,7 @@ def gguf_fixture(endian="<"):
             data += struct.pack(endian + "II", 4, value)
     data += gguf_string("tokenizer.ggml.tokens", endian) + struct.pack(endian + "IIQ", 9, 8, 2)
     data += gguf_string("private token A", endian) + gguf_string("private token B", endian)
-    for name, shape in (("token_embd.weight", (16, 32)), ("blk.0.attn.weight", (4, 8))):
+    for name, shape in tensors:
         data += gguf_string(name, endian) + struct.pack(endian + "I", len(shape))
         data += b"".join(struct.pack(endian + "Q", dim) for dim in shape)
         data += struct.pack(endian + "IQ", 14, 0)
@@ -53,6 +55,9 @@ class ModelMetadataTests(unittest.TestCase):
         self.assertEqual(value["quantization"], "Q6_K")
         self.assertIsNone(value["expert_count"])
         self.assertEqual(value["model"], "selected-model")
+        self.assertEqual(value["vocab_size"], 32)
+        self.assertEqual(value["head_dim"], 128)
+        self.assertEqual(value["block_tensors"], [{"layer": 1, "name": "blk.0.attn.weight", "shape": [4, 8], "elements": 32}])
         self.assertNotIn("private token", str(value))
 
     def test_big_endian_gguf_is_supported(self):
@@ -85,6 +90,41 @@ class ModelMetadataTests(unittest.TestCase):
                 path.write_bytes(b"invalid")
                 self.assertFalse(cache.snapshot(path, "second")["available"])
                 self.assertEqual(read.call_count, 3)
+
+    def test_each_block_uses_stored_shapes_and_explicit_head_dimension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.gguf"
+            path.write_bytes(gguf_fixture(extra_metadata={"hunyuan-dense.attention.key_length": 64}, tensors=(
+                ("token_embd.weight", (4096, 128167)), ("blk.0.attn_q.weight", (4096, 4096)),
+                ("blk.31.attn_k.weight", (4096, 1024)), ("blk.31.ffn_down.weight", (14336, 4096)),
+                ("output_norm.weight", (4096,)),
+            )))
+            value = read_architecture(path, "model")
+        self.assertEqual(value["head_dim"], 64)
+        self.assertEqual(value["vocab_size"], 128167)
+        self.assertEqual([tensor["layer"] for tensor in value["block_tensors"]], [1, 32, 32])
+        self.assertEqual(value["block_tensors"][-1]["shape"], [14336, 4096])
+        self.assertFalse(value["block_tensors_truncated"])
+
+    def test_tensor_display_cap_preserves_full_parameter_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.gguf"
+            path.write_bytes(gguf_fixture(tensors=(("blk.0.attn_q.weight", (4, 8)), ("blk.1.attn_q.weight", (4, 8)))))
+            with patch("local_translator.model_metadata.MAX_BLOCK_TENSORS", 1):
+                value = read_architecture(path, "model")
+        self.assertEqual(len(value["block_tensors"]), 1)
+        self.assertTrue(value["block_tensors_truncated"])
+        self.assertEqual(value["parameter_count"], 64)
+
+    def test_nested_tensor_cache_is_isolated_and_unknown_architecture_has_no_derived_head_dimension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.gguf"
+            path.write_bytes(gguf_fixture(extra_metadata={"general.architecture": "unrecognized"}))
+            cache = ArchitectureMetadataCache()
+            first = cache.snapshot(path, "model")
+            self.assertIsNone(first["head_dim"])
+            first["block_tensors"][0]["shape"][0] = 999
+            self.assertEqual(cache.snapshot(path, "model")["block_tensors"][0]["shape"], [4, 8])
 
 
 if __name__ == "__main__":

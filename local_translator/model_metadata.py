@@ -4,8 +4,10 @@ Format: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 """
 from __future__ import annotations
 
+import copy
 import math
 from pathlib import Path
+import re
 import struct
 import threading
 from typing import Any, BinaryIO
@@ -16,6 +18,7 @@ from .inference_telemetry import token_count
 MAX_HEADER_BYTES = 64 * 1024 * 1024
 MAX_ENTRIES = 200_000
 MAX_ARRAY_ENTRIES = 2_000_000
+MAX_BLOCK_TENSORS = 4096
 SCALARS = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f",
            7: "?", 10: "Q", 11: "q", 12: "d"}
 FILE_TYPES = {0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 7: "Q8_0", 8: "Q5_0", 9: "Q5_1",
@@ -81,7 +84,8 @@ def unavailable(model: str, message: str) -> dict[str, Any]:
         "available": False, "source": "unavailable", "model": model, "message": message,
         **{key: None for key in ("architecture", "name", "block_count", "embedding_length", "attention_heads",
                                "kv_heads", "feed_forward_length", "context_length", "expert_count", "expert_used_count",
-                               "tensor_count", "parameter_count", "quantization")},
+                               "tensor_count", "parameter_count", "quantization", "vocab_size", "head_dim")},
+        "block_tensors": [], "block_tensors_truncated": False,
     }
 
 
@@ -106,7 +110,7 @@ def read_architecture(path: Path, model: str) -> dict[str, Any]:
             metadata = {}
             wanted_suffixes = (".block_count", ".embedding_length", ".attention.head_count",
                                ".attention.head_count_kv", ".feed_forward_length", ".context_length",
-                               ".expert_count", ".expert_used_count")
+                               ".expert_count", ".expert_used_count", ".vocab_size", ".attention.key_length")
             for _ in range(metadata_count):
                 key = header.string(keep=True, max_length=512)
                 keep = key in ("general.architecture", "general.name", "general.file_type") or key.endswith(wanted_suffixes)
@@ -114,15 +118,30 @@ def read_architecture(path: Path, model: str) -> dict[str, Any]:
                 if keep:
                     metadata[key] = value
             parameters = 0
+            block_tensors = []
+            block_tensors_truncated = False
+            embedding_vocab = None
             for _ in range(tensor_count):
-                header.string(keep=False, max_length=512)
+                name = header.string(keep=True, max_length=512)
                 dimensions = header.unpack("I")
                 if not 1 <= dimensions <= 4:
                     raise ValueError("unsupported GGUF tensor shape")
                 shape = [header.unpack("Q") for _ in range(dimensions)]
                 if not all(shape):
                     raise ValueError("invalid GGUF tensor shape")
-                parameters += math.prod(shape)
+                elements = math.prod(shape)
+                parameters += elements
+                # Shapes use GGUF's stored dimension order. Never read weights,
+                # vocabulary entries, or follow the tensor data offset.
+                if name == "token_embd.weight" and len(shape) == 2:
+                    embedding_vocab = token_count(shape[1])
+                block = re.fullmatch(r"blk\.(\d{1,6})\.(.+)", name)
+                if block and all(token_count(value) is not None for value in shape):
+                    if len(block_tensors) < MAX_BLOCK_TENSORS:
+                        block_tensors.append({"layer": int(block[1]) + 1, "name": name,
+                                              "shape": shape, "elements": token_count(elements)})
+                    else:
+                        block_tensors_truncated = True
                 header.unpack("I")  # Tensor type; no tensor data is accessed.
                 header.unpack("Q")  # Tensor offset; never followed.
         architecture = metadata.get("general.architecture")
@@ -131,6 +150,11 @@ def read_architecture(path: Path, model: str) -> dict[str, Any]:
         def dimension(suffix):
             return token_count(metadata.get(f"{architecture}.{suffix}"))
         file_type = token_count(metadata.get("general.file_type"))
+        head_dim = dimension("attention.key_length")
+        embedding_length, attention_heads = dimension("embedding_length"), dimension("attention.head_count")
+        if head_dim is None and architecture == "hunyuan-dense" and embedding_length and attention_heads:
+            if embedding_length % attention_heads == 0:
+                head_dim = embedding_length // attention_heads
         return {
             "available": True, "source": "gguf", "model": model, "architecture": architecture,
             "name": metadata.get("general.name") if isinstance(metadata.get("general.name"), str) else None,
@@ -139,6 +163,9 @@ def read_architecture(path: Path, model: str) -> dict[str, Any]:
             "feed_forward_length": dimension("feed_forward_length"), "context_length": dimension("context_length"),
             "expert_count": dimension("expert_count"), "expert_used_count": dimension("expert_used_count"),
             "tensor_count": tensor_count, "parameter_count": token_count(parameters),
+            "vocab_size": embedding_vocab if embedding_vocab is not None else dimension("vocab_size"),
+            "head_dim": head_dim, "block_tensors": block_tensors,
+            "block_tensors_truncated": block_tensors_truncated,
             "quantization": FILE_TYPES.get(file_type, f"GGUF type {file_type}" if file_type is not None else None),
             "message": "来自选中本地 GGUF 的架构元数据；参数量为存储张量元素总数，动画为计算阶段示意",
         }
@@ -162,4 +189,4 @@ class ArchitectureMetadataCache:
             if key != self._key:
                 self._value = read_architecture(path, model)
                 self._key = key
-            return dict(self._value)
+            return copy.deepcopy(self._value)

@@ -238,6 +238,10 @@ export interface ModelArchitecture {
   tensor_count: number | null;
   parameter_count: number | null;
   quantization: string | null;
+  vocab_size?: number | null;
+  head_dim?: number | null;
+  block_tensors?: { layer: number; name: string; shape: number[]; elements: number | null }[];
+  block_tensors_truncated?: boolean;
   message: string;
 }
 
