@@ -9,6 +9,7 @@ import {
   ensureGateway,
   getDownloadEnvironment,
   getStatus,
+  invalidateGatewaySession,
   loadModel,
   selectDataDirectory,
   setDataDirectory,
@@ -71,6 +72,24 @@ export default function App() {
   const [customDirectoryOpen, setCustomDirectoryOpen] = useState(false);
   const [directoryDraft, setDirectoryDraft] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let stopped = false;
+    const cleanup: (() => void)[] = [];
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      for (const event of ["gateway-error", "gateway-terminated"]) {
+        const unlisten = await listen(event, () => {
+          if (stopped) return;
+          invalidateGatewaySession();
+          setStatus((previous) => previous ? { ...previous, ready: false, owned_process: false, active_model: null, running_models: [] } : previous);
+          setError("本地网关已断开，工作区内容已保留。重新启用模型可恢复连接。");
+        });
+        if (stopped) unlisten(); else cleanup.push(unlisten);
+      }
+    }).catch(() => {});
+    return () => { stopped = true; cleanup.forEach((unlisten) => unlisten()); };
+  }, []);
 
   async function refresh() {
     const next = await getStatus();
@@ -187,6 +206,7 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
+      await ensureGateway();
       await loadModel(selectedModel);
       const next = await refresh();
       if (!next.ready) throw new Error("模型尚未就绪，请查看本地日志后重试");

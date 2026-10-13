@@ -54,6 +54,9 @@ export interface InstalledModelStatus {
 }
 
 export interface LocalStatus {
+  lifecycle?: "unloaded" | "loading" | "ready" | "unloading" | "failed";
+  lifecycle_error?: string | null;
+  runtime_instance_id?: string | null;
   max_input_chars?: number;
   backend: "llama.cpp";
   ready: boolean;

@@ -33,6 +33,7 @@ test('popup listens before handshake, waits for remembered target, and cleans up
   globalThis.__selectionTest = {
     async invoke(command, args) {
       calls.push({ command, args });
+      if (command === 'gateway_session') return { url: 'http://127.0.0.1:8787', token: 'session-test', instance_id: 'instance', protocol_version: 2 };
       if (command === 'selection_get_config') return configRead;
       if (command === 'selection_snapshot') return snapshotRead;
       return undefined;
@@ -48,6 +49,7 @@ test('popup listens before handshake, waits for remembered target, and cleans up
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, init) => {
+    assert.equal(init.headers.get('Authorization'), 'Bearer session-test');
     if (url.endsWith('/admin/status')) return Response.json({ ready: true, model_configured: 'model', backend: 'llama.cpp' });
     if (url.endsWith('/translate/cancel')) return Response.json({ status: 'cancelling' });
     requests.push(JSON.parse(init.body));
