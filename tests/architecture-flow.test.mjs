@@ -14,7 +14,7 @@ const fixture = () => ({
 let bundle;
 async function load() {
   if (!bundle) {
-    await build({ stdin: { contents: 'export * from "./src/features/model-architecture/ModelArchitecturePage"; export * from "./src/features/model-architecture/ArchitectureFlow";', resolveDir: process.cwd() }, outfile: 'artifacts/validation/architecture-flow-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' } });
+    await build({ stdin: { contents: 'export * from "./src/features/model-architecture/ModelArchitecturePage"; export * from "./src/features/model-architecture/ArchitectureFlow";', resolveDir: process.cwd() }, outfile: 'artifacts/validation/architecture-flow-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' } });
     bundle = await import(pathToFileURL(resolve('artifacts/validation/architecture-flow-test.mjs')).href);
   }
   return bundle;

@@ -31,7 +31,7 @@ async function loadComponents() {
   await build({
     entryPoints: ['src/features/model-monitor/ModelDashboard.tsx', 'src/features/model-monitor/InferenceDashboard.tsx'],
     outdir: 'artifacts/validation/inference-dashboard-test', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic',
-    define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' },
+    define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' },
   });
   components = {
     ...(await import(pathToFileURL(resolve('artifacts/validation/inference-dashboard-test/InferenceDashboard.js')).href)),

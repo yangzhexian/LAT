@@ -11,7 +11,7 @@ async function loadTS(file, transform = (s) => s) {
 }
 const history = await loadTS('src/lib/history.ts');
 const text = await loadTS('src/lib/text.ts');
-const api = await loadTS('src/lib/api.ts', (s) => s.replace('import.meta.env.VITE_GATEWAY_URL', 'undefined'));
+const api = await loadTS('src/lib/api.ts', (s) => s.replace('import.meta.env.VITE_GATEWAY_URL', 'undefined').replace('import.meta.env.DEV', 'false'));
 
 test('history persists newest 30 records, supports deletion and clear', async () => {
   await history.updateHistory({ clear: true });

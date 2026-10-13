@@ -10,7 +10,7 @@ import 'fake-indexeddb/auto';
 async function bundleWorkspace(outfile) {
   await build({
     entryPoints: ['src/features/translator/TranslatorWorkspace.tsx'], outfile, bundle: true, platform: 'node',
-    format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' },
+    format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' },
     plugins: [{
       name: 'workspace-model-page-fixtures',
       setup(builder) {

@@ -42,7 +42,7 @@ export function invalidateGatewaySession(): void { sessionGeneration++; gatewayS
 
 async function gatewayFetch(path: string, init?: RequestInit): Promise<Response> {
   let base = GATEWAY_URL;
-  let token = import.meta.env?.VITE_GATEWAY_TOKEN || "";
+  let token = import.meta.env.DEV ? import.meta.env.VITE_GATEWAY_TOKEN || "" : "";
   if (isTauri()) {
     if (!gatewaySession) {
       const generation = sessionGeneration;

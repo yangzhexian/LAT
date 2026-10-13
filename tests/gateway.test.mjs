@@ -61,3 +61,10 @@ test("a disconnected session cannot be restored by a late native reply", async (
     assert.equal(fetches, 0);
   } finally { globalThis.fetch = original; delete globalThis.window; api.invalidateGatewaySession(); }
 });
+
+
+test("production bundles discard the development bearer credential", async () => {
+  const result = await build({ entryPoints: ["src/lib/api.ts"], bundle: true, platform: "browser", format: "esm", packages: "external", write: false, minify: true,
+    define: { "import.meta.env.DEV": "false", "import.meta.env.VITE_GATEWAY_URL": "undefined", "import.meta.env.VITE_GATEWAY_TOKEN": JSON.stringify("development-only-secret-sentinel") } });
+  assert.equal(result.outputFiles[0].text.includes("development-only-secret-sentinel"), false);
+});

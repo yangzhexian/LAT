@@ -10,7 +10,7 @@ test('GPU dashboard charts real samples, distinguishes unavailable data and stop
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
   const React = await import('react');
   const { createRoot } = await import('react-dom/client');
-  await build({ entryPoints: ['src/features/model-monitor/ModelDashboard.tsx'], outfile: 'artifacts/validation/dashboard-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' } });
+  await build({ entryPoints: ['src/features/model-monitor/ModelDashboard.tsx'], outfile: 'artifacts/validation/dashboard-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' } });
   const { ModelDashboard } = await import(pathToFileURL(resolve('artifacts/validation/dashboard-test.mjs')).href);
   const originalFetch = globalThis.fetch;
   let calls = 0;

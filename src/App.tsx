@@ -82,6 +82,7 @@ export default function App() {
         const unlisten = await listen(event, () => {
           if (stopped) return;
           invalidateGatewaySession();
+          setScreen((current) => current === "translator" ? "select" : current);
           setStatus((previous) => previous ? { ...previous, ready: false, owned_process: false, active_model: null, running_models: [] } : previous);
           setError("本地网关已断开，工作区内容已保留。重新启用模型可恢复连接。");
         });

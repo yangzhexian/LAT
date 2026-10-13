@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 
 async function loadSelectionWindow() {
   const outfile = 'artifacts/validation/selection-window-test.mjs';
-  await build({ entryPoints: ['src/features/selection/SelectionWindow.tsx'], outfile, bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' }, plugins: [{ name: 'native-selection-test', setup(build) {
+  await build({ entryPoints: ['src/features/selection/SelectionWindow.tsx'], outfile, bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' }, plugins: [{ name: 'native-selection-test', setup(build) {
     build.onResolve({ filter: /^@tauri-apps\/api\/(core|event)$/ }, ({ path }) => ({ path, namespace: 'mock' }));
     build.onLoad({ filter: /.*/, namespace: 'mock' }, ({ path }) => ({ contents: path.endsWith('/core')
       ? 'export const invoke = (...args) => globalThis.__selectionTest.invoke(...args);'
