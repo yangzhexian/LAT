@@ -4,11 +4,13 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import closing
 from typing import Any, Iterator
 
 from .config import Settings
 from .errors import LlamaError, LlamaHTTPError
 from .inference_telemetry import response_metrics
+from .stream_transport import stream_lines
 
 
 class LlamaServerClient:
@@ -125,7 +127,7 @@ class LlamaServerClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.settings.request_timeout_seconds) as response:
+            with closing(stream_lines(request.full_url, body, self.settings, options.get("_cancel"))) as response:
                 usage: dict[str, Any] = {}
                 timings: dict[str, Any] = {}
                 done_reason: str | None = None

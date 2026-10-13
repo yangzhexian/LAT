@@ -10,6 +10,10 @@ class ModelNotReadyError(LlamaError):
     code = "model_not_ready"
 
 
+class ModelBusyError(LlamaError):
+    code = "model_busy"
+
+
 class DownloadCancelled(LlamaError):
     """Raised when a runtime or model download is cancelled by the user."""
 

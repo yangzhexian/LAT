@@ -30,7 +30,7 @@ class LlamaServerClientTests(unittest.TestCase):
         from local_translator.errors import LlamaError
         response = StreamingResponse([b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n'])
         client = LlamaServerClient("http://127.0.0.1:1234", Settings())
-        with patch("local_translator.llama_client.urllib.request.urlopen", return_value=response):
+        with patch("local_translator.llama_client.stream_lines", side_effect=lambda *args: (line for line in response)):
             with self.assertRaisesRegex(LlamaError, "incomplete_stream"):
                 list(client.chat_stream("model", [], {}))
 
@@ -44,7 +44,7 @@ class LlamaServerClientTests(unittest.TestCase):
             ]
         )
         client = LlamaServerClient("http://127.0.0.1:1234", Settings())
-        with patch("local_translator.llama_client.urllib.request.urlopen", return_value=response):
+        with patch("local_translator.llama_client.stream_lines", side_effect=lambda *args: (line for line in response)):
             events = list(client.chat_stream("model", [], {}))
 
         complete = [event for event in events if event.get("done")]

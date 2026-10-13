@@ -27,7 +27,7 @@ class FakeManager:
     def __init__(self):
         self.client = FakeLlamaClient()
 
-    def ensure_server(self):
+    def ensure_server(self, **_kwargs):
         return self.client
 
 

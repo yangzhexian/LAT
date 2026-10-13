@@ -72,9 +72,9 @@ class InferenceTelemetryTests(unittest.TestCase):
             "[DONE]",
         ])
         client = LlamaServerClient("http://127.0.0.1:1234", Settings())
-        with patch("local_translator.llama_client.urllib.request.urlopen", return_value=response) as request:
+        with patch("local_translator.llama_client.stream_lines", side_effect=lambda *args: (line for line in response)) as request:
             events = list(client.chat_stream("model", [], {}))
-        payload = json.loads(request.call_args.args[0].data)
+        payload = json.loads(request.call_args.args[1])
         self.assertTrue(payload["timings_per_token"])
         self.assertTrue(payload["stream_options"]["include_usage"])
         final = events[-1]
@@ -138,7 +138,7 @@ class InferenceTelemetryTests(unittest.TestCase):
                 yield {"done": True, "done_reason": "stop", "inference_metrics": response_metrics(
                     {"usage": {"prompt_tokens": 10, "completion_tokens": 3}})}
         class Manager:
-            def ensure_server(self):
+            def ensure_server(self, **_kwargs):
                 return Client()
         engine = TranslationEngine(Settings(), Manager())
         result = engine.translate({"text": "Hello", "target_language": "Chinese"})

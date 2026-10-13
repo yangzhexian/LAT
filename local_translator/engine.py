@@ -6,12 +6,12 @@ import uuid
 import logging
 import time
 import threading
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from .config import Settings
-from .errors import LlamaError
+from .errors import LlamaError, ModelBusyError
 from .prompts import build_translation_prompt, parse_translation_input
 from .quality import clean_model_output, is_fatal, protect_text, quality_issues
 from .runtime import LlamaCppProcessManager
@@ -50,6 +50,28 @@ class TranslationEngine:
         self._jobs: dict[str, TranslationJob] = {}
         self._active_job: TranslationJob | None = None
         self.inference = InferenceTelemetry()
+        self._jobs_lock = threading.Lock()
+        self._stopping = threading.Event()
+
+    @contextmanager
+    def management(self):
+        if not self._translation_lock.acquire(blocking=False):
+            raise ModelBusyError("翻译或模型操作正在进行，请完成或取消后重试")
+        try:
+            if self._stopping.is_set():
+                raise ModelBusyError("网关正在退出")
+            yield
+        finally:
+            self._translation_lock.release()
+
+    def begin_shutdown(self):
+        self._stopping.set()
+        self.cancel_active()
+
+    def cancel_active(self):
+        job = self._active_job
+        if job is not None:
+            job.cancel.set()
 
     def _options(self, retry: bool = False) -> dict[str, Any]:
         return {
@@ -101,11 +123,14 @@ class TranslationEngine:
         for event in self.translate_stream(body):
             if event["type"] == "complete":
                 return TranslationResult(event["translation"], event["model"], event["quality_issues"], "", event["metrics"])
+            if event["type"] == "cancelled":
+                raise TranslationRequestError("翻译已取消，已完成分段保留", "translation_cancelled")
         raise TranslationOutputError("incomplete_stream: 翻译未完成")
 
-    def cancel_translation(self, job_id: str) -> None:
-        job = self._jobs.get(job_id)
-        if job is None:
+    def cancel_translation(self, job_id: str, owner: str | None = None) -> None:
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+        if job is None or (owner is not None and job.owner != owner):
             raise TranslationRequestError("checkpoint_expired: 翻译断点已过期，请重新翻译", "checkpoint_expired")
         job.cancel.set()
 
@@ -113,6 +138,8 @@ class TranslationEngine:
         resume_id = body.get("job_id")
         waiting_since = time.monotonic()
         while not self._translation_lock.acquire(blocking=False):
+            if self._stopping.is_set() or (isinstance(body.get("_cancel"), threading.Event) and body["_cancel"].is_set()):
+                raise TranslationRequestError("翻译已取消", "translation_cancelled")
             active = self._active_job
             if not (resume_id and active and active.id == resume_id and active.cancel.is_set()):
                 raise TranslationRequestError("translation_busy: 模型正在处理另一个翻译任务，请稍后重试", "translation_busy")
@@ -121,12 +148,18 @@ class TranslationEngine:
             yield {"type": "waiting", "job_id": resume_id, "message": "等待上次推理停止，随后从断点继续…"}
             time.sleep(0.1)
         try:
+            if self._stopping.is_set():
+                raise TranslationRequestError("网关正在退出", "gateway_stopping")
             yield from self._translate_document(body)
         finally:
             self._active_job = None
             self._translation_lock.release()
 
     def _get_job(self, body: dict[str, Any]) -> TranslationJob:
+        with self._jobs_lock:
+            return self._get_job_locked(body)
+
+    def _get_job_locked(self, body: dict[str, Any]) -> TranslationJob:
         try:
             request = parse_translation_input(body, self.settings.default_target_language)
         except ValueError as error:
@@ -136,6 +169,7 @@ class TranslationEngine:
             raise TranslationRequestError(f"待翻译文本过长（{len(source)} 字符），当前上限为 {self.settings.max_input_chars}")
         fingerprint = hashlib.sha256(json.dumps({
             "request": asdict(request), "model": self.settings.model_name,
+            "owner": body.get("_owner", ""),
             "runtime_root": str(self.settings.resolved_data_root), "options": self._options(),
         }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         now = time.monotonic()
@@ -150,6 +184,8 @@ class TranslationEngine:
             if job.fingerprint != fingerprint:
                 raise TranslationRequestError("checkpoint_mismatch: 原文、语言、模型或推理配置已改变，请重新翻译", "checkpoint_mismatch")
             job.cancel.clear()
+            if isinstance(body.get("_cancel"), threading.Event):
+                job.cancel = body["_cancel"]
             job.updated_at = now
             return job
         overhead = token_cost(build_translation_prompt(request, "")) + 256
@@ -161,6 +197,9 @@ class TranslationEngine:
             del self._jobs[oldest]
         job = TranslationJob(uuid.uuid4().hex, fingerprint, source, self.settings.model_name,
                              [(part, 0) for part in split_source(source, budget)])
+        job.owner = body.get("_owner", "")
+        if isinstance(body.get("_cancel"), threading.Event):
+            job.cancel = body["_cancel"]
         self._jobs[job.id] = job
         return job
 
@@ -174,10 +213,14 @@ class TranslationEngine:
             self.manager.require_ready_server()
         job = self._get_job(body)
         self._active_job = job
+        if self._stopping.is_set():
+            job.cancel.set()
         started = time.perf_counter()
         in_flight = False
         elapsed = lambda: job.elapsed_ms + (time.perf_counter() - started) * 1000
         try:
+            if job.cancel.is_set():
+                raise TranslationCancelled()
             # The server's checkpoint is authoritative, even if the client lost
             # the last segment event while disconnecting. Never append it twice.
             yield {"type": "plan", **job.checkpoint(), "elapsed_ms": round(elapsed(), 1)}
@@ -209,6 +252,10 @@ class TranslationEngine:
                                 raise TranslationCancelled()
                             if event["type"] == "usage":
                                 usage = event["metrics"]
+                                if usage.get("prompt_tokens") is None:
+                                    job.prompt_tokens_known = False
+                                else:
+                                    job.prompt_tokens += usage["prompt_tokens"]
                                 if usage.get("generated_tokens") is None:
                                     job.tokens_known = False
                                 else:
@@ -255,16 +302,20 @@ class TranslationEngine:
                        "chunk_index": len(job.completed), "elapsed_ms": round(elapsed(), 1)}
             metrics = self._metrics({"eval_count": job.generated_tokens if job.tokens_known else None,
                                      "eval_duration": job.eval_ns if job.eval_known else None, "done_reason": "stop"}, elapsed())
+            metrics["prompt_tokens"] = job.prompt_tokens if job.prompt_tokens_known else None
+            metrics["total_tokens"] = job.prompt_tokens + job.generated_tokens if job.prompt_tokens_known and job.tokens_known else None
             yield {"type": "complete", **job.checkpoint(), "model": job.model,
                    "quality_issues": sorted(job.issues), "metrics": metrics}
         except TranslationCancelled:
             if in_flight:
                 job.tokens_known = False
+                job.prompt_tokens_known = False
                 job.eval_known = False
             yield {"type": "cancelled", **job.checkpoint(), "message": "已取消，已完成分段保留，可继续翻译"}
-        except GeneratorExit:
+        except (GeneratorExit, Exception):
             if in_flight:
                 job.tokens_known = False
+                job.prompt_tokens_known = False
                 job.eval_known = False
             raise
         finally:
@@ -283,7 +334,7 @@ class TranslationEngine:
 
         protected = protect_text(request.source_text)
         prompt = build_translation_prompt(request, protected.protected)
-        client = self.manager.require_ready_server() if body.get("require_ready") is True else self.manager.ensure_server()
+        client = self.manager.require_ready_server() if body.get("require_ready") is True else self.manager.ensure_server(cancel=cancel)
         model = client.resolve_model()
         attempts = 2 if self.settings.retry_on_bad_output else 1
         for attempt in range(attempts):
@@ -299,6 +350,7 @@ class TranslationEngine:
             estimated_tokens = 0.0
             from .segments import token_cost
             options = self._options(retry=attempt > 0)
+            options["_cancel"] = cancel
             options["max_tokens"] = min(self.settings.max_output_tokens, self.settings.num_ctx - token_cost(current_prompt) - 256)
             if options["max_tokens"] < 32:
                 raise TranslationOutputError("context_budget: 当前分段没有足够的输出预算")
@@ -346,6 +398,8 @@ class TranslationEngine:
                 issues.append("incomplete_stream")
             elapsed_ms = (time.perf_counter() - started) * 1000
             metrics = self._metrics(final_response, elapsed_ms)
+            inference_metrics = final_response.get("inference_metrics") or {}
+            metrics["prompt_tokens"] = inference_metrics.get("prompt_tokens")
             yield {"type": "usage", "metrics": metrics}
             if not is_fatal(issues):
                 yield {

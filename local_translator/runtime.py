@@ -9,13 +9,14 @@ import tempfile
 import threading
 import time
 import zipfile
+import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
 from .catalog import MODEL_VARIANTS, RUNTIME_ASSETS, DownloadAsset, ModelVariant, get_model_variant
 from .config import Settings
 from .downloader import AssetDownloader
-from .errors import DownloadCancelled, LlamaError, ModelNotReadyError
+from .errors import DownloadCancelled, LlamaError, ModelNotReadyError, ModelBusyError
 from .llama_client import LlamaServerClient
 from .version import __version__
 
@@ -32,11 +33,25 @@ class LlamaCppProcessManager:
         self.server_port: int | None = None
         self.client: LlamaServerClient | None = None
         self.download_lock = threading.Lock()
+        self._operation_lock = threading.RLock()
+        self._state_lock = threading.Lock()
+        self._stop_requested = threading.Event()
+        self._generation = 0
+        self.lifecycle = "unloaded"
+        self.lifecycle_error: str | None = None
+        self.runtime_instance_id: str | None = None
         self.downloader = AssetDownloader(f"LAT/{__version__}")
-        self._remember_data_root(settings.resolved_data_root)
 
     def set_data_root(self, root: str) -> dict[str, Any]:
+        with self._operation_lock:
+            if self.download_lock.locked():
+                raise ModelBusyError("下载进行中，无法修改数据目录")
+            return self._set_data_root(root)
+
+    def _set_data_root(self, root: str) -> dict[str, Any]:
         path = Path(root).expanduser().resolve()
+        if path == self.settings.resolved_data_root:
+            return self.status()
         path.mkdir(parents=True, exist_ok=True)
         self.shutdown()
         self.settings.runtime_root = str(path)
@@ -158,10 +173,11 @@ class LlamaCppProcessManager:
             shutil.rmtree(stage, ignore_errors=True)
 
     def install_stream(self, model: str | None = None) -> Iterator[dict[str, Any]]:
-        if not self.download_lock.acquire(blocking=False):
-            raise LlamaError("已有下载任务正在运行")
-        selected = get_model_variant(model or self.settings.model_name)
-        self.settings.model_name = selected.id
+        with self._operation_lock:
+            selected = get_model_variant(model or self.settings.model_name)
+            if not self.download_lock.acquire(blocking=False):
+                raise ModelBusyError("已有下载任务正在运行")
+            self.settings.model_name = selected.id
         self.downloader.reset()
         try:
             self.settings.resolved_data_root.mkdir(parents=True, exist_ok=True)
@@ -234,7 +250,34 @@ class LlamaCppProcessManager:
             raise ModelNotReadyError("模型尚未启用或正在准备，请先在主窗口启用模型")
         return client
 
-    def ensure_server(self) -> LlamaServerClient:
+    def load_model(self, model: str) -> LlamaServerClient:
+        selected = get_model_variant(model)
+        with self._operation_lock:
+            if self.download_lock.locked():
+                raise ModelBusyError("下载进行中，请完成后再切换模型")
+            if self.client is not None and self.client.resolve_model() != selected.id:
+                self._shutdown_locked()
+            self.settings.model_name = selected.id
+            return self.ensure_server()
+
+    def ensure_server(self, cancel: threading.Event | None = None) -> LlamaServerClient:
+        generation = self._generation
+        with self._operation_lock:
+            if generation != self._generation or (cancel is not None and cancel.is_set()):
+                raise ModelNotReadyError("模型启动已取消")
+            if self.download_lock.locked():
+                raise ModelBusyError("下载进行中，请稍后启用模型")
+            self._stop_requested.clear()
+            try:
+                return self._ensure_server_locked(cancel)
+            except Exception as error:
+                self._shutdown_locked()
+                with self._state_lock:
+                    self.lifecycle = "failed"
+                    self.lifecycle_error = str(error)
+                raise
+
+    def _ensure_server_locked(self, cancel: threading.Event | None) -> LlamaServerClient:
         if (
             self.owned_process is not None
             and self.owned_process.poll() is None
@@ -242,6 +285,10 @@ class LlamaCppProcessManager:
             and self.client.is_ready()
         ):
             return self.client
+        self._shutdown_locked()
+        with self._state_lock:
+            self.lifecycle = "loading"
+            self.lifecycle_error = None
         selected = get_model_variant(self.settings.model_name)
         executable = self._server_executable()
         model_path = self.settings.resolved_model_path
@@ -282,41 +329,63 @@ class LlamaCppProcessManager:
         self.owned_process = process
         self.server_port = port
         self.client = LlamaServerClient(f"http://127.0.0.1:{port}", self.settings)
+        self.runtime_instance_id = uuid.uuid4().hex
         deadline = time.monotonic() + 90.0
         while time.monotonic() < deadline:
+            if self._stop_requested.is_set() or (cancel is not None and cancel.is_set()):
+                raise ModelNotReadyError("模型启动已取消")
             if self.client.is_ready():
+                with self._state_lock:
+                    self.lifecycle = "ready"
                 return self.client
             if process.poll() is not None:
                 exit_code = process.returncode
-                self.shutdown()
                 raise LlamaError(f"llama.cpp 启动失败 退出码 {exit_code} 请查看 {self.settings.resolved_log_file}")
             time.sleep(0.25)
-        self.shutdown()
         raise LlamaError(f"llama.cpp 启动超时 请查看 {self.settings.resolved_log_file}")
 
     def shutdown(self) -> None:
         self.cancel_download()
+        with self._state_lock:
+            self._generation += 1
+            self._stop_requested.set()
+        with self._operation_lock:
+            self._shutdown_locked()
+
+    def _shutdown_locked(self) -> None:
         process = self.owned_process
+        with self._state_lock:
+            self.lifecycle = "unloading" if process is not None else "unloaded"
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=2)
+            except (subprocess.TimeoutExpired, OSError):
+                try:
+                    process.kill()
+                    process.wait(timeout=2)
+                except (subprocess.TimeoutExpired, OSError) as error:
+                    with self._state_lock:
+                        self.lifecycle = "failed"
+                        self.lifecycle_error = "模型进程未能退出"
+                    raise LlamaError("模型进程未能退出，请重试关闭") from error
         self.owned_process = None
         self.client = None
         self.server_port = None
-        if process is None or process.poll() is not None:
-            return
-        try:
-            process.terminate()
-            process.wait(timeout=8)
-        except (subprocess.TimeoutExpired, OSError):
-            try:
-                process.kill()
-            except OSError:
-                pass
+        self.runtime_instance_id = None
+        with self._state_lock:
+            self.lifecycle = "unloaded"
+            self.lifecycle_error = None
 
     def status(self) -> dict[str, Any]:
         selected = get_model_variant(self.settings.model_name)
         executable = self._server_executable()
         model = self.settings.resolved_model_path
-        process_running = self.owned_process is not None and self.owned_process.poll() is None
-        ready = bool(self.client and process_running and self.client.is_ready())
+        process, client = self.owned_process, self.client
+        process_running = process is not None and process.poll() is None
+        with self._state_lock:
+            lifecycle, lifecycle_error = self.lifecycle, self.lifecycle_error
+        ready = bool(client and process_running and lifecycle not in ("loading", "unloading") and client.is_ready())
         model_verified = self._verified(model, selected.size, selected.sha256)
         models: list[dict[str, Any]] = []
         for variant in MODEL_VARIANTS:
@@ -336,10 +405,13 @@ class LlamaCppProcessManager:
                     },
                 }
             )
-        active_model = self.client.resolve_model() if ready and self.client is not None else None
+        active_model = client.resolve_model() if ready and client is not None else None
         active = next((item for item in models if item["name"] == active_model), None)
         result: dict[str, Any] = {
             "backend": "llama.cpp",
+            "lifecycle": lifecycle if process_running or lifecycle != "ready" else "failed",
+            "lifecycle_error": lifecycle_error,
+            "runtime_instance_id": self.runtime_instance_id,
             "ready": ready,
             "owned_process": process_running,
             "model_configured": selected.id,

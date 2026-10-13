@@ -14,7 +14,7 @@ from local_translator.server import App, RequestHandler
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
-        settings = Settings(port=0)
+        settings = Settings(port=0, admin_token="test-admin-secret", api_key="test-api-key")
         app = App(settings)
         app.engine.translate = Mock(return_value=type("Result", (), {"text": "Hello", "model": "hy-mt2-7b:q6_k", "issues": [], "metrics": None})())
         app.engine.manager.install_stream = Mock(return_value=iter([
@@ -39,7 +39,7 @@ class ServerTests(unittest.TestCase):
         request = urllib.request.Request(
             self.url + "/v1/chat/completions",
             data=json.dumps({"messages": [{"role": "user", "content": "Translate into English: 你好"}]}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(request) as response:
@@ -49,7 +49,7 @@ class ServerTests(unittest.TestCase):
     def test_translation_success_response_remains_compatible(self):
         request = urllib.request.Request(self.url + "/translate",
             data=json.dumps({"text": "你好"}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(request) as response:
             self.assertEqual(json.loads(response.read()), {
                 "translation": "Hello", "model": "hy-mt2-7b:q6_k", "quality_issues": [], "metrics": None,
@@ -66,7 +66,7 @@ class ServerTests(unittest.TestCase):
                     self.httpd.app.engine.translate.side_effect = error
                     request = urllib.request.Request(self.url + route,
                         data=json.dumps({"text": "你好"}).encode(),
-                        headers={"Content-Type": "application/json"}, method="POST")
+                        headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json"}, method="POST")
                     with self.assertRaises(urllib.error.HTTPError) as raised:
                         urllib.request.urlopen(request)
                     with raised.exception as response:
@@ -81,7 +81,7 @@ class ServerTests(unittest.TestCase):
         manager.ensure_server = Mock()
         request = urllib.request.Request(self.url + "/translate/stream",
             data=json.dumps({"text": "你好", "require_ready": True}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(request) as response:
             self.assertEqual(response.status, 200)
             events = [json.loads(line[6:]) for line in response.read().decode().splitlines() if line.startswith("data: ")]
@@ -95,7 +95,7 @@ class ServerTests(unittest.TestCase):
         try:
             request = urllib.request.Request(self.url + "/translate/stream",
                 data=json.dumps({"text": "新请求", "require_ready": True}).encode(),
-                headers={"Content-Type": "application/json"}, method="POST")
+                headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(request) as response:
                 events = [json.loads(line[6:]) for line in response.read().decode().splitlines() if line.startswith("data: ")]
             self.assertEqual(events[0]["type"], "error")
@@ -108,7 +108,7 @@ class ServerTests(unittest.TestCase):
     def test_telemetry_endpoint(self):
         sample = {"timestamp": 1, "gpus": [{"id": "gpu", "power_w": None}], "message": ""}
         self.httpd.app.telemetry.snapshot = Mock(return_value=sample)
-        with urllib.request.urlopen(self.url + "/admin/telemetry") as response:
+        with urllib.request.urlopen(urllib.request.Request(self.url + "/admin/telemetry", headers={"Authorization": "Bearer test-admin-secret"})) as response:
             result = json.loads(response.read())
             self.assertEqual({key: result[key] for key in sample}, sample)
             self.assertIsNone(result["inference"]["active"])
@@ -120,16 +120,16 @@ class ServerTests(unittest.TestCase):
         engine.cancel_translation = Mock()
         request = urllib.request.Request(self.url + "/translate/cancel",
             data=json.dumps({"job_id": "job-1"}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(request) as response:
             self.assertEqual(json.loads(response.read())["status"], "cancelling")
-        engine.cancel_translation.assert_called_once_with("job-1")
+        engine.cancel_translation.assert_called_once_with("job-1", self.httpd.app.identity.authorize("Bearer test-admin-secret", admin=True))
 
     def test_download_cancel_endpoint(self):
         request = urllib.request.Request(
             self.url + "/admin/download/cancel",
             data=b"",
-            headers={"Content-Type": "application/json"},
+            headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(request) as response:
@@ -139,7 +139,7 @@ class ServerTests(unittest.TestCase):
         request = urllib.request.Request(
             self.url + "/admin/download",
             data=json.dumps({"model": "hy-mt2-7b:q6_k"}).encode(),
-            headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+            headers={"Authorization": "Bearer test-admin-secret", "Content-Type": "application/json", "Accept": "text/event-stream"},
             method="POST",
         )
         with urllib.request.urlopen(request) as response:
@@ -153,7 +153,7 @@ class ServerTests(unittest.TestCase):
     def test_environment_accepts_selected_model_query(self, inspect):
         inspect.return_value = {"model": "hy-mt2-7b:q8_0", "status": "insufficient"}
 
-        with urllib.request.urlopen(self.url + "/admin/environment?model=hy-mt2-7b%3Aq8_0") as response:
+        with urllib.request.urlopen(urllib.request.Request(self.url + "/admin/environment?model=hy-mt2-7b%3Aq8_0", headers={"Authorization": "Bearer test-admin-secret"})) as response:
             body = json.loads(response.read().decode())
 
         self.assertEqual(body["model"], "hy-mt2-7b:q8_0")

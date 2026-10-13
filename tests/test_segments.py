@@ -29,7 +29,7 @@ class Manager:
     def __init__(self):
         self.client = EchoClient()
 
-    def ensure_server(self):
+    def ensure_server(self, **_kwargs):
         return self.client
 
 

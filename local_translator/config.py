@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,13 @@ class Settings:
     llama_runtime_variant: str = "cuda-13.3"
     llama_release: str = "b10545"
     request_timeout_seconds: float = 600.0
+    connect_timeout_seconds: float = 3.0
+    first_response_timeout_seconds: float = 120.0
+    stream_idle_timeout_seconds: float = 30.0
+    admin_token: str = ""
+    api_key: str = ""
+    allowed_origins: list[str] = field(default_factory=list)
+    gateway_instance_id: str = ""
     max_input_chars: int = 100000
     max_output_tokens: int = 4096
     num_ctx: int = 8192
@@ -51,7 +59,20 @@ class Settings:
         allowed = {field.name for field in fields(cls)}
         settings = cls(**{key: value for key, value in values.items() if key in allowed})
         settings.apply_environment()
+        settings.validate()
         return settings
+
+    def validate(self) -> None:
+        if not isinstance(self.allowed_origins, list) or any(not isinstance(origin, str) or "://" not in origin or "*" in origin or any(char.isspace() for char in origin) for origin in self.allowed_origins):
+            raise ValueError("allowed_origins 必须是明确的 Origin 列表，不能包含通配符")
+        for name in ("request_timeout_seconds", "connect_timeout_seconds", "first_response_timeout_seconds", "stream_idle_timeout_seconds"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} 必须是有限的正数")
+        for name in ("admin_token", "api_key", "gateway_instance_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or len(value) > 512 or any(not 33 <= ord(char) <= 126 for char in value):
+                raise ValueError(f"{name} 必须是最多 512 位可打印 ASCII 字符，不能包含空白")
 
     def apply_environment(self) -> None:
         mapping = {
@@ -63,6 +84,12 @@ class Settings:
             "llama_runtime_variant": ("LAT_LLAMA_RUNTIME_VARIANT", str),
             "llama_release": ("LAT_LLAMA_RELEASE", str),
             "request_timeout_seconds": ("LLM_TRANSLATOR_TIMEOUT", float),
+            "connect_timeout_seconds": ("LAT_CONNECT_TIMEOUT", float),
+            "first_response_timeout_seconds": ("LAT_FIRST_RESPONSE_TIMEOUT", float),
+            "stream_idle_timeout_seconds": ("LAT_STREAM_IDLE_TIMEOUT", float),
+            "admin_token": ("LAT_ADMIN_TOKEN", str),
+            "api_key": ("LAT_API_KEY", str),
+            "gateway_instance_id": ("LAT_GATEWAY_INSTANCE_ID", str),
             "max_input_chars": ("LLM_TRANSLATOR_MAX_INPUT_CHARS", int),
             "max_output_tokens": ("LLM_TRANSLATOR_MAX_OUTPUT_TOKENS", int),
             "num_ctx": ("LLM_TRANSLATOR_NUM_CTX", int),
