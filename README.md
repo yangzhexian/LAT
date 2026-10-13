@@ -4,7 +4,7 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.2.1-beta.4`（本地复验版）
+> 当前版本：`0.2.1-beta.5`（第一轮稳定性验收版）
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
@@ -47,7 +47,7 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 
 固定浮窗后再次划词会更新原文和译文，并保留你调整后的窗口位置与尺寸；取消固定后恢复跟随新选区定位。
 
-本版变化与复验项目见 [beta.4 发布说明](docs/releases/v0.2.1-beta.4.md)、[模型架构浏览设计](docs/design/model-architecture.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md)。
+本版完成模型生命周期、取消链路与网关会话管理的第一轮稳定性改进，详见 [beta.5 发布说明](docs/releases/v0.2.1-beta.5.md)、[运行时设计](docs/design/runtime-stability.md) 和 [验收清单](docs/acceptance/lat-runtime-stability-checklist.md)。模型架构与推理看板的既有功能继续保留，见 [模型架构浏览设计](docs/design/model-architecture.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md)。
 
 beta.1 的用户验收记录已保留；beta.2 修复浮标首次点击、鼠标延迟与浮窗圆角，等待针对这些问题复验。兼容性记录见 [划词翻译验收清单](docs/acceptance/lat-selection-translation-checklist.md)，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
 
@@ -100,10 +100,11 @@ git clone git@github.com:yangzhexian/LAT.git
 Set-Location LAT
 
 Copy-Item translator.config.example.json translator.config.json
+$env:LAT_ADMIN_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 python -m local_translator serve
 ```
 
-网关默认监听 `http://127.0.0.1:8787`。
+网关默认监听 `http://127.0.0.1:8787`。从 beta.5 开始，手动启动必须设置 `LAT_ADMIN_TOKEN` 或本地配置的 `admin_token`；管理命令使用同一密钥。桌面版自动创建仅在本次运行有效的管理密钥，无需手动填写。`GET /health` 公开返回版本、协议版本和实例标识，其他数据及管理接口要求 Bearer 密钥。
 
 ### 运行 Tauri 开发版本
 
@@ -114,11 +115,14 @@ python -m pip install -r requirements-build.txt
 npm run tauri dev
 ```
 
-仅调试前端时可以运行：
+仅调试前端时，在已配置同一管理密钥的终端运行；先另行启动上述网关：
 
 ```powershell
+$env:VITE_GATEWAY_TOKEN = $env:LAT_ADMIN_TOKEN
 npm run dev
 ```
+
+`VITE_GATEWAY_TOKEN` 仅用于本机 Vite 开发，不应写入提交或分发构建。Tauri 主窗口和划词浮窗从原生层获取会话，不把管理密钥写入本地存储。若主动复用手动启动的网关，应从配置了相同 `LAT_ADMIN_TOKEN` 的终端启动 Tauri；推荐使用上述随机生成的密钥。复用网关不归桌面进程所有，退出桌面不会关闭它。
 
 ### 首次使用流程
 
@@ -175,6 +179,13 @@ npm run build:installer
 | `num_ctx` | `8192` | 上下文长度 |
 | `max_output_tokens` | `4096` | 每段最大输出 token 数 |
 | `max_input_chars` | `100000` | 整篇输入字符上限，可用 `LLM_TRANSLATOR_MAX_INPUT_CHARS` 覆盖 |
+| `admin_token` | 空 | 手动网关管理密钥，可用 `LAT_ADMIN_TOKEN` 覆盖；桌面版自动设置 |
+| `api_key` | 空 | 第三方翻译密钥，可用 `LAT_API_KEY` 覆盖；空值不允许第三方密钥访问 |
+| `allowed_origins` | `[]` | 额外允许的明确 Origin，例如实际扩展的 `chrome-extension://<id>`；不支持通配符 |
+| `connect_timeout_seconds` | `3` | 单次模型 HTTP 连接时限；`LAT_CONNECT_TIMEOUT` |
+| `first_response_timeout_seconds` | `120` | 单次模型调用等待首条 SSE 数据的时限；`LAT_FIRST_RESPONSE_TIMEOUT` |
+| `stream_idle_timeout_seconds` | `30` | 已开始响应后连续无数据的时限；`LAT_STREAM_IDLE_TIMEOUT` |
+| `request_timeout_seconds` | `600` | 单次模型调用总时限，包含连接与等待；`LLM_TRANSLATOR_TIMEOUT` |
 
 环境变量优先级高于配置文件：
 
@@ -187,13 +198,17 @@ $env:LLM_TRANSLATOR_PORT = "8787"
 
 ## OpenAI 兼容接口
 
-启动网关并完成模型安装后，在 nextai-translator 的 OpenAI 兼容服务中填写：
+启动网关前设置独立的 `LAT_API_KEY`，或在本地 `translator.config.json` 中配置 `api_key`，再完成模型安装。第三方密钥支持翻译、模型列表和取消自己创建的任务，不能修改数据目录、下载、卸载模型或关闭网关。在 nextai-translator 的 OpenAI 兼容服务中填写：
 
 ```text
 API URL: http://127.0.0.1:8787/v1
-API Key: local
+API Key: 与 LAT_API_KEY / api_key 相同的值
 Model: hy-mt2-7b:q6_k
 ```
+
+旧版任意填写 `local` 的方式不再可用。带有 Origin 的客户端还需使用内置本地来源或配置 `allowed_origins`；没有 Origin 的本地客户端仍需 Bearer 密钥。管理密钥与第三方密钥应使用不同的随机值。
+
+`stream: true` 在每段通过质量与格式校验后增量发送该段译文；不会把尚未校验的模型 token 或提示词直接送给客户端。`stream_options: {"include_usage": true}` 请求最终用量，计数包括实际分段、重试及同一任务的续译调用，重复段缓存不增加调用用量。计数缺失时，非流式响应省略 `usage`，流式最终用量为 `null`，不会用零冒充测量结果。
 
 主要接口：
 
@@ -309,14 +324,14 @@ LAT 以 MIT 许可证发布，详见 [LICENSE](LICENSE)。
 
 `POST /translate/stream` 和 `POST /translate` 可附加 `require_ready: true`，要求仅使用已启用模型，模型未就绪时返回 `model_not_ready`；省略时保留既有行为。JSON 错误对象增加 `error.code`，SSE 错误事件增加 `code`，可用于区分 `translation_busy`、`model_not_ready` 与其他失败，原状态码和消息字段保留。
 
-`POST /translate/stream` 保留原请求字段，新增 `plan`、`segment_complete` 事件。
-`completed_chars / total_chars` 表示已经通过校验的原文比例，`completed_chunks / total_chunks` 表示分段进度；运行时细分可能增加总段数，原文比例不回退。
-`segment_complete.translation` 只包含本段译文；`complete.translation` 包含整篇译文。客户端仅收到 `complete` 后才应视为成功。
-实时速度是估算值，最终指标使用模型计数和包含重试的总耗时。关闭 SSE 连接会清理上游推理连接；预填充阶段的取消可能等待下一次模型输出。
-`GET /admin/status` 新增 `max_input_chars`。现有 `/translate` 和 OpenAI 兼容响应结构保持兼容，共用分段引擎。
+`POST /translate/stream` 保留原请求字段，新增 `plan`、`segment_complete` 事件。`completed_chars / total_chars` 表示已经通过校验的原文比例，`completed_chunks / total_chunks` 表示分段进度；运行时细分可能增加总段数，原文比例不回退。`segment_complete.translation` 只包含本段译文；`complete.translation` 包含整篇译文。客户端仅收到 `complete` 后才应视为成功。
+
+实时速度是估算值，最终指标使用模型计数和包含重试的总耗时。关闭 SSE 或普通 JSON 翻译连接都会取消对应任务并关闭上游模型连接；等待响应头或首条输出期间也可取消，无需等待下一条 token。连接、首响应、流空闲和单次调用总时限分别受控，实际显存回收与取消延迟需在本机模型上验收。
+
+`GET /admin/status` 返回 `max_input_chars`、`lifecycle`、`lifecycle_error` 和 `runtime_instance_id`。翻译中不允许加载、切换或卸载模型以及修改数据目录，管理冲突返回 HTTP 409 / `model_busy`。`/translate` 和 OpenAI 兼容接口共用分段引擎，均需要上述鉴权；客户端须与协议版本 2 的网关配套。
 
 历史保存在当前 WebView 的 `lat.history` 数据库中，不随模型目录迁移，也不进行云同步。开发浏览器和安装版使用各自的本地存储。
 
 前端逻辑回归测试：`npm run test:frontend`。
 
-本轮本地验收说明和人工检查项见 [毛玻璃与长文本验收清单](docs/acceptance/lat-ui-longtext-checklist.md)。
+本轮人工检查项见 [beta.5 运行时稳定性验收清单](docs/acceptance/lat-runtime-stability-checklist.md)。此前的 [毛玻璃与长文本验收记录](docs/acceptance/lat-ui-longtext-checklist.md) 保持原有勾选。
