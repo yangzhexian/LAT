@@ -4,7 +4,7 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.2.1-beta.6`（第二轮性能验收版）
+> 当前版本：`0.2.1-beta.7`（第三轮历史与浏览体验验收版）
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
@@ -20,7 +20,7 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 - 支持中文、英文、日文、韩文、法文、德文、俄文等 Hy-MT2 支持语言的互译
 - 支持左右或上下排版，并可交换源语言与目标语言
 - 左侧导航提供翻译、历史、模型与设置；关闭模型后保留当前工作区
-- 翻译历史仅保存在本机 IndexedDB，默认保留最近 30 条，可选 10/30/50/100/200 条或关闭新记录保存，支持恢复、删除和清空
+- 翻译历史仅保存在本机 IndexedDB，默认保留最近 30 条及最多 64 MiB 内容，可选 10/30/50/100/200 条、16/32/64/128 MiB 或关闭新记录保存；支持全文搜索、语言/模型/来源筛选、20 条分页摘要、按需展开、恢复、删除、清空及 JSON/Markdown 完整导出
 - 默认支持 100,000 字符长文本，按段落及上下文预算分段，显示已完成段数与原文处理进度
 - 支持取消或失败后继续剩余分段；断点由本地网关在内存保留最多 1 小时、最近 8 个任务，退出应用后不保留；重复段落复用已校验译文
 - 支持明暗主题、自动字体大小、合并换行及减少动态效果设置
@@ -31,6 +31,7 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 - 模型页展示推理输入/输出/总 token、生成及输入处理速度、首 token 延迟、耗时和本次网关会话的累计用量；质量重试与长文分段分别计入实际模型调用，缺失的后端数据明确显示未知
 - 模型页通过“模型推理 / GPU 硬件”选项卡选择看板；模型与架构页使用外侧页面滚动，避免嵌套滚动条
 - 左侧“模型架构”以书架展示本地 GGUF 的各层，抽出书脊可进入 Transformer 层、Attention/KV heads、FFN、Embedding 和 Output；层间与残差支路连续可见，参数区可切换矩阵结构和张量列表，分步骤教学动画支持暂停和减少动态效果，不表示实际权重数值或逐参数活动
+- 架构页按模型保留层、模块、张量、参数视图、教学步骤和滚动位置，切页返回后从暂停状态继续；同一窗口会话最多记忆八个模型，模型结构变化时自动回到总览
 - 关闭模型时终止 LAT 管理的 llama-server 并释放显存
 - 提供 OpenAI 兼容接口，可供 nextai-translator 等客户端调用
 
@@ -47,11 +48,13 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 
 固定浮窗后再次划词会更新原文和译文，并保留你调整后的窗口位置与尺寸；取消固定后恢复跟随新选区定位。
 
-本版在第一轮稳定性改进之上增加分段调度、NVML GPU 采集、按页面拆分的遥测接口及长文渲染优化，详见 [beta.6 发布说明](docs/releases/v0.2.1-beta.6.md)、[第二轮性能设计](docs/design/performance-round2.md) 和 [验收清单](docs/acceptance/lat-performance-checklist.md)。此前的 [运行时设计](docs/design/runtime-stability.md)、[模型架构浏览设计](docs/design/model-architecture.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md) 继续适用，第二轮文档说明变更的数据接口。
+本版完成第三轮历史检索、架构浏览连续性和通用控件整理，详见 [beta.7 发布说明](docs/releases/v0.2.1-beta.7.md) 和 [第三轮设计](docs/design/history-navigation-round3.md)。前三轮及既有功能共用一份 [统一验收清单](docs/acceptance/lat-acceptance-checklist.md)，旧勾选、原文样例与反馈保存在该文件的历史附录中。此前的 [运行时设计](docs/design/runtime-stability.md)、[第二轮性能设计](docs/design/performance-round2.md)、[模型架构浏览设计](docs/design/model-architecture.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md) 继续适用。
 
 主窗口的 LaTeX 预览最多排版前 4,000 个 UTF-16 字符、40 个完整公式，遇到未闭合公式时在其前停止，并显示范围提示；“文本”视图、复制及历史始终保留全文。GPU 历史从网关启动持续采集，原生 NVML 不可用时自动使用较低频率的兼容采集，并显示实际周期。
 
-beta.1 的用户验收记录已保留；beta.2 修复浮标首次点击、鼠标延迟与浮窗圆角，等待针对这些问题复验。兼容性记录见 [划词翻译验收清单](docs/acceptance/lat-selection-translation-checklist.md)，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
+beta.1 的用户验收记录已保留；beta.2 修复浮标首次点击、鼠标延迟与浮窗圆角，对应待复验项已并入 [统一验收清单](docs/acceptance/lat-acceptance-checklist.md)。划词兼容性反馈可查阅该清单中的历史附录，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
+
+历史容量以完整记录 JSON 的 UTF-8 字节数计算，包含原文、提交文本、译文和元数据，不等于 WebView 实际磁盘占用。达到任一上限会按时间删除最旧完整记录；单条超过容量时保留原库并提示保存失败。普通分页只读取短摘要，搜索关键词时按候选逐条扫描全文，导出时读取符合筛选条件的完整记录。升级时在同一事务中为旧记录建立摘要，失败会回滚；首次打开不自动裁剪既有超限记录，下一次成功保存或主动调整上限时再应用双上限，超限页面会提示先导出。失败保存队列只保留在当前窗口内存，关闭软件前应完成重试或另行复制需要保留的译文。
 
 ## 模型选择与推荐
 
@@ -342,4 +345,4 @@ LAT 以 MIT 许可证发布，详见 [LICENSE](LICENSE)。
 
 前端逻辑回归测试：`npm run test:frontend`。
 
-本轮人工检查项见 [beta.5 运行时稳定性验收清单](docs/acceptance/lat-runtime-stability-checklist.md)。此前的 [毛玻璃与长文本验收记录](docs/acceptance/lat-ui-longtext-checklist.md) 保持原有勾选。
+人工检查统一使用 [LAT 验收清单](docs/acceptance/lat-acceptance-checklist.md)。其中当前版本项目由用户填写，历史附录原样保留此前六份清单的勾选与反馈；开发自动测试不代替人工验收。
