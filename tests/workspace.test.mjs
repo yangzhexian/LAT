@@ -14,6 +14,13 @@ async function bundleWorkspace(outfile) {
     plugins: [{
       name: 'workspace-model-page-fixtures',
       setup(builder) {
+        builder.onResolve({ filter: /^better-react-mathjax$/ }, () => ({ path: 'mathjax', namespace: 'mathjax-fixture' }));
+        builder.onLoad({ filter: /.*/, namespace: 'mathjax-fixture' }, () => ({
+          loader: 'tsx', resolveDir: resolve('.'), contents: `export function MathJax({ children }) {
+            globalThis.workspaceMathRenders?.push(children);
+            return <div data-math-preview>{children}</div>;
+          }`,
+        }));
         builder.onResolve({ filter: /\/(ModelArchitecturePage|ModelDashboard)$/ }, ({ path }) => ({ path: path.split('/').at(-1), namespace: 'model-page-fixture' }));
         builder.onLoad({ filter: /.*/, namespace: 'model-page-fixture' }, ({ path }) => ({
           loader: 'tsx', resolveDir: resolve('.'), contents: `export function ${path}({ interval, reduceMotion }) {
@@ -202,6 +209,117 @@ test('architecture navigation works with the model off and long model pages use 
   } finally {
     await React.act(async () => root.unmount());
     globalThis.fetch = originalFetch;
+    dom.window.close();
+  }
+});
+
+test('100k workspace retains full text, queues with selection, batches progress, and mounts bounded preview only when visible', async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true, workspaceMathRenders: [] });
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-longtext-test.mjs');
+  const root = createRoot(document.getElementById('root'));
+  const fullSource = '文😀'.repeat(50000);
+  const fullOutput = '$x+y$ translated '.repeat(8000);
+  const props = {
+    status: { ready: true, model_configured: 'longtext-test-model', backend: 'llama.cpp', max_input_chars: 100000 },
+    settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, dataDirectory: '', saveHistory: true, historyLimit: 30 },
+    selectionTransfer: { id: 100, text: fullSource }, selectionBusy: true,
+    onSettingsChange() {}, onDisable() {},
+  };
+  const originalFetch = globalThis.fetch;
+  let streamController;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    if (url.endsWith('/translate/cancel')) return Response.json({ status: 'cancelling' });
+    return new Response(new ReadableStream({ start(controller) { streamController = controller; init.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true }); } }));
+  };
+  const click = async (selector) => React.act(async () => document.querySelector(selector).click());
+  const emit = async (...events) => React.act(async () => {
+    streamController.enqueue(new TextEncoder().encode(events.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('')));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+  try {
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, props)));
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSource);
+    assert.match(document.querySelector('.progress-copy').textContent, /100,000 \/ 100,000/);
+    assert.equal(document.querySelector('.translate-button').disabled, false, 'selection can run while a workspace job queues');
+    assert.equal(document.querySelector('[aria-label="交换语言和内容"]').disabled, true);
+    assert.equal(workspaceMathRenders.length, 0, 'text editing never mounts MathJax');
+    await click('.text-pane:first-child .pane-actions button:last-child');
+    assert.ok(workspaceMathRenders.at(-1).length <= 4000);
+    assert.match(document.querySelector('[role="note"]').textContent, /完整内容保留/);
+    await click('.translate-button');
+    assert.equal(requests[0].body.text, fullSource);
+    assert.equal(requests[0].body.request_source, 'workspace');
+    await emit({ type: 'waiting', job_id: 'longtext-job', queue_position: 2 });
+    assert.match(document.querySelector('.workspace-status').textContent, /排队位置 2/);
+    await React.act(async () => {
+      [...document.querySelectorAll('button')].find((button) => button.textContent === '取消翻译').click();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    assert.equal(requests.at(-1).url.endsWith('/translate/cancel'), true, 'waiting before the first plan has an explicit cancellation identity');
+    assert.equal(requests.at(-1).body.job_id, 'longtext-job');
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/);
+    await click('.translate-button');
+    assert.equal(requests.at(-1).body.job_id, 'longtext-job');
+    assert.equal(requests.at(-1).body.text, fullSource, 'queued resume submits the entire 100k Unicode source');
+    await emit({ type: 'waiting', job_id: 'longtext-job', queue_position: 1, message: '等待模型处理，当前排队第 1 位…', translation: 'must not replace validated output' });
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '', 'waiting never overwrites translation');
+    assert.match(document.querySelector('.workspace-status').textContent, /当前排队第 1 位/);
+    assert.doesNotMatch(document.querySelector('.workspace-status').textContent, /排队位置/, 'server queue message is not repeated');
+    await emit({ type: 'error', code: 'translation_queue_timeout', message: '翻译排队等待超时，可稍后继续' });
+    await React.act(async () => { streamController.close(); await new Promise((resolve) => setTimeout(resolve, 10)); });
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/, 'queue timeout retains the waiting checkpoint');
+    await click('.translate-button');
+    assert.equal(requests.at(-1).body.job_id, 'longtext-job');
+    assert.equal(requests.at(-1).body.text, fullSource);
+    await emit({ type: 'plan', job_id: 'longtext-job', total_chars: 100000, total_chunks: 2, completed_chars: 0, completed_chunks: 0 });
+    await emit({ type: 'waiting', message: '等待划词翻译完成', queue_position: 1 });
+    assert.match(document.querySelector('.workspace-status').textContent, /等待划词翻译完成/);
+    const beforeProgress = workspaceMathRenders.length;
+    await emit(...Array.from({ length: 1000 }, (_, index) => ({ type: 'progress', generated_chars: index, elapsed_ms: index, tokens_per_second: 20 })));
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
+    assert.equal(workspaceMathRenders.length, beforeProgress, 'progress does not rerender the unchanged source pane');
+    await click('[aria-label="设置"]');
+    assert.equal(document.querySelector('[data-math-preview]'), null, 'hidden workspace unmounts formula preview');
+    const hiddenRenders = workspaceMathRenders.length;
+    await emit({ type: 'segment_complete', translation: fullOutput.slice(0, 60000), completed_chars: 50000, completed_chunks: 1 });
+    assert.equal(workspaceMathRenders.length, hiddenRenders);
+    await click('[aria-label="翻译"]');
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullOutput.slice(0, 60000));
+    await click('.text-pane:last-child .pane-actions button:last-child');
+    const boundedRenders = workspaceMathRenders.length;
+    await emit({ type: 'complete', job_id: 'longtext-job', translation: fullOutput, model: 'longtext-test-model', completed_chars: 100000, completed_chunks: 2 }, { type: 'segment_complete', translation: 'STALE APPEND' });
+    assert.equal(workspaceMathRenders.length, boundedRenders, 'an unchanged bounded prefix does not trigger repeated typesetting as output grows');
+    await React.act(async () => { streamController.close(); await new Promise((resolve) => setTimeout(resolve, 30)); });
+    assert.ok([...document.querySelectorAll('[data-math-preview]')].every((node) => node.textContent.length <= 4000));
+    await click('.text-pane:last-child .pane-actions button:first-child');
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullOutput, 'terminal output is complete, ignores late events, and remains available for selection and copying');
+    await click('.text-pane:first-child .pane-actions button:first-child');
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSource);
+    await click('[aria-label="历史记录"]');
+    const row = [...document.querySelectorAll('.history-card')].find((node) => node.textContent.includes('longtext-test-model'));
+    assert.equal(row.querySelectorAll('.history-text')[0].textContent, fullSource);
+    assert.equal(row.querySelectorAll('.history-text')[1].textContent, fullOutput);
+    await click('[aria-label="翻译"]');
+    await click('.translate-button');
+    await emit({ type: 'plan', job_id: 'cancel-longtext', translation: '', total_chunks: 2, total_chars: 100000 }, { type: 'segment_complete', translation: fullOutput.slice(0, 60000), completed_chars: 50000, completed_chunks: 1 }, { type: 'progress', elapsed_ms: 4321 });
+    await React.act(async () => {
+      [...document.querySelectorAll('button')].find((button) => button.textContent === '取消翻译').click();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullOutput.slice(0, 60000));
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/);
+    assert.match(document.querySelector('.workspace-status').textContent, /已完成 1\/2 段/);
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
+    assert.match(document.querySelector('.workspace-status').textContent, /已取消/);
+  } finally {
+    await React.act(async () => root.unmount());
+    globalThis.fetch = originalFetch;
+    delete globalThis.workspaceMathRenders;
     dom.window.close();
   }
 });

@@ -132,12 +132,14 @@ test('legacy gateway leaves inference metrics unavailable without architecture d
   } finally { await h.close(); }
 });
 
-test('monitor tabs show one view and share a single telemetry poll with accessible keyboard navigation', async () => {
+test('monitor tabs poll only the selected endpoint with accessible keyboard navigation', async () => {
   const originalFetch = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = async () => {
-    calls++;
-    return Response.json({ timestamp: Date.now() / 1000, gpus: [{ id: 'gpu', name: 'Tab test GPU', memory_used_mib: 1024, memory_total_mib: 8192, power_w: 50, power_limit_w: 100, utilization_pct: 15, temperature_c: 40 }], message: '', inference: snapshot() });
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(new URL(url).pathname);
+    if (url.endsWith('/telemetry/inference')) return Response.json(snapshot());
+    assert.ok(url.includes('/telemetry/gpu'));
+    return Response.json({ timestamp: Date.now() / 1000, samples: [], interval: 10, gpus: [{ id: 'gpu', name: 'Tab test GPU', memory_used_mib: 1024, memory_total_mib: 8192, power_w: 50, power_limit_w: 100, utilization_pct: 15, temperature_c: 40 }], message: '' });
   };
   const h = await harness({ interval: 10 }, true);
   try {
@@ -166,7 +168,7 @@ test('monitor tabs show one view and share a single telemetry poll with accessib
     await h.React.act(async () => tabs[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'End', bubbles: true })));
     assert.equal(document.activeElement, tabs[1]);
     assert.equal(document.querySelectorAll('[role="tabpanel"]:not([hidden])').length, 1);
-    assert.equal(calls, 1);
+    assert.deepEqual(requests, ['/admin/telemetry/inference', '/admin/telemetry/gpu', '/admin/telemetry/inference', '/admin/telemetry/gpu', '/admin/telemetry/inference', '/admin/telemetry/gpu']);
   } finally { await h.close(); globalThis.fetch = originalFetch; }
 });
 
@@ -187,7 +189,7 @@ test('dashboard preserves metrics on disconnect and resumes one poll after hidin
     assert.equal(signal.aborted, true);
     await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(calls, 1);
-    globalThis.fetch = async () => { calls++; return Response.json({ timestamp: Date.now() / 1000, gpus: [], samples: [], message: '显卡监测暂不可用', inference: snapshot() }); };
+    globalThis.fetch = async (url) => { calls++; assert.ok(url.endsWith('/telemetry/inference')); return Response.json(snapshot()); };
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
     await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
     assert.ok(document.querySelector('.inference-dashboard'));

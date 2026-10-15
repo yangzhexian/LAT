@@ -41,6 +41,7 @@ test('selection validates Unicode cap, protects full source and requires an alre
   await tick();
   assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].require_ready, true);
+  assert.equal(h.requests[0].request_source, 'selection');
   assert.equal(h.requests[0].source_language, 'Auto Detect');
   assert.equal(h.requests[0].target_language, 'French');
   h.controller.dispose();
@@ -157,5 +158,39 @@ test('dismissal before job acknowledgement aborts connection without cancelling 
   assert.equal(h.streams[0].signal.aborted, true);
   assert.deepEqual(h.cancelled, []);
   assert.equal(h.history.length, 0);
+  h.controller.dispose();
+});
+
+test('queued selection has a cancellable identity and timeout can be retried', async () => {
+  const h = harness();
+  h.controller.accept({ requestId: '1', text: 'Queued selection' }, 'zh');
+  await tick();
+  h.streams[0].callback({ type: 'waiting', job_id: 'queued-popup', queue_position: 2 });
+  assert.match(h.controller.view.message, /第 2 位/);
+  h.controller.dismiss();
+  assert.deepEqual(h.cancelled, ['queued-popup']);
+  h.streams[0].resolve();
+  await tick();
+  h.controller.accept({ requestId: '2', text: 'Retry selection' }, 'zh');
+  await tick();
+  h.streams[1].callback({ type: 'waiting', job_id: 'retry-popup', queue_position: 1 });
+  h.streams[1].callback({ type: 'error', code: 'translation_queue_timeout', message: 'Timeout' });
+  h.streams[1].callback({ type: 'segment_complete', translation: 'stale' });
+  h.streams[1].resolve();
+  await tick();
+  assert.equal(h.controller.view.phase, 'error');
+  assert.equal(h.controller.view.translation, '');
+  assert.match(h.controller.view.message, /等待模型的时间过长/);
+  assert.equal(h.history.length, 0);
+  void h.controller.run('zh');
+  await tick();
+  h.streams[2].callback({ type: 'waiting', job_id: 'successful-popup', queue_position: 1 });
+  h.streams[2].callback({ type: 'attempt' });
+  assert.equal(h.controller.view.message, '正在翻译…');
+  h.streams[2].callback({ type: 'complete', job_id: 'successful-popup', translation: '结果' });
+  h.streams[2].resolve();
+  await tick();
+  assert.equal(h.controller.view.phase, 'complete');
+  assert.equal(h.history.length, 1);
   h.controller.dispose();
 });

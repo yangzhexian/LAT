@@ -146,6 +146,7 @@ export interface TranslationMetrics {
 }
 
 export interface TranslationRequest {
+  request_source?: "workspace" | "selection";
   require_ready?: boolean;
   job_id?: string;
   text: string;
@@ -155,6 +156,8 @@ export interface TranslationRequest {
 }
 
 export interface StreamEvent {
+  request_source?: "workspace" | "selection" | "api";
+  queue_position?: number;
   code?: string;
   job_id?: string;
   type: "waiting" | "cancelled" | "plan" | "segment_complete" | "attempt" | "progress" | "retry" | "complete" | "error";
@@ -188,12 +191,19 @@ export interface GpuSample {
   temperature_c: number | null;
 }
 export interface TelemetrySample {
+  provider?: "nvml" | "nvidia-smi" | null;
+  provider_status?: "starting" | "ok" | "partial" | "fallback" | "unavailable";
+  provider_message?: string;
+  provider_interval?: number | null;
   timestamp: number;
   gpus: GpuSample[];
   message: string;
 }
 
 export interface TelemetrySnapshot extends TelemetrySample {
+  session_id?: string;
+  cursor?: number | null;
+  reset?: boolean;
   samples: TelemetrySample[];
   interval: number;
   inference?: InferenceSnapshot;
@@ -263,5 +273,5 @@ export interface InferenceSnapshot {
   active: InferenceRecord | null;
   latest: InferenceRecord | null;
   history: InferenceRecord[];
-  architecture: ModelArchitecture;
+  architecture?: ModelArchitecture;
 }

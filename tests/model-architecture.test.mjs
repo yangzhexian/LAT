@@ -41,7 +41,7 @@ async function harness(props, page = false) {
   await render(props);
   return { dom, React, render, scrolls: () => scrolls, reduceSystem: async (value) => React.act(async () => { media.matches = value; for (const listener of motionListeners) listener(); }), click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
 }
-const telemetry = (architecture) => ({ timestamp: Date.now() / 1000, message: '', gpus: [], samples: [], interval: 2, inference: { architecture, active: null, latest: null, history: [], summary: { calls: 0 } } });
+const telemetry = (architecture) => ({ architecture });
 
 test('all actual layers drill into Attention and FFN, restore breadcrumbs, and focus the new view', async () => {
   const architecture = fixture();
@@ -233,4 +233,30 @@ test('hidden request cancellation ignores late metadata and cleanup stops pollin
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; if (document.querySelector('#root')?.childNodes.length) await h.close(); }
+});
+
+test('architecture polling uses only conditional metadata requests with a five-second minimum', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, etag: init.headers.get('If-None-Match') });
+    if (requests.length > 1) return new Response(null, { status: 304 });
+    return Response.json({ architecture: { ...fixture(), available: false } }, { headers: { ETag: '"architecture-only"' } });
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let h;
+  try {
+    h = await harness({ interval: .5, reduceMotion: true }, true);
+    assert.equal(requests.length, 1);
+    assert.ok(requests[0].url.endsWith('/admin/architecture'));
+    await h.React.act(async () => t.mock.timers.tick(4999));
+    assert.equal(requests.length, 1, '0.5-second telemetry setting must not accelerate architecture polling');
+    await h.React.act(async () => t.mock.timers.tick(1));
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].etag, '"architecture-only"');
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
+    await h.React.act(async () => t.mock.timers.tick(10000));
+    assert.equal(requests.length, 2, 'hidden architecture page stops polling');
+  } finally { if (h) await h.close(); t.mock.timers.reset(); globalThis.fetch = originalFetch; }
 });

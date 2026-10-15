@@ -103,14 +103,17 @@ export class SelectionController {
         return;
       }
       await this.deps.translate({ text: source, source_language: languageName("auto"),
-        target_language: languageName(language), require_ready: true }, (event) => {
-        if (!live()) return;
+        target_language: languageName(language), require_ready: true, request_source: "selection" }, (event) => {
+        if (!live() || completed || failure) return;
         if (event.job_id) this.jobId = event.job_id;
         if (event.total_chars && event.completed_chars != null) {
           this.update({ progress: Math.min(100, event.completed_chars / event.total_chars * 100) });
         }
         if (event.type === "plan") this.update({ translation: event.translation || "", message: "正在翻译…" });
-        if (event.type === "segment_complete") this.update({ translation: this.view.translation + (event.translation || "") });
+        if (event.type === "waiting") this.update({ message: event.message || (event.queue_position
+          ? `正在排队 · 第 ${event.queue_position} 位` : "正在等待当前分段完成…") });
+        if (event.type === "attempt") this.update({ message: "正在翻译…" });
+        if (event.type === "segment_complete") this.update({ translation: this.view.translation + (event.translation || ""), message: "正在翻译…" });
         if (event.type === "retry") this.update({ message: "正在重新校验当前分段…" });
         if (event.type === "error") failure = event;
         if (event.type === "complete") completed = event;
@@ -132,7 +135,8 @@ export class SelectionController {
     } catch (error) {
       if (!live()) return;
       const code = (failure as StreamEvent | null)?.code || (error as { code?: string })?.code;
-      const message = code === "translation_busy" ? "模型正在处理其他翻译，请稍后重试。"
+      const message = code === "translation_busy" ? "其他翻译已占满等待队列，请稍后重试。"
+        : code === "translation_queue_timeout" ? "等待模型的时间过长，请稍后重试。"
         : code === "model_not_ready" ? "模型尚未启用。启用后返回此窗口重试。"
         : error instanceof Error ? error.message : String(error);
       this.update({ phase: code === "model_not_ready" ? "model-required" : "error", message });

@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { getTelemetry } from "../../lib/api";
+import { getModelArchitecture } from "../../lib/api";
 import {
   actualLayerCount, architectureSource, formatNumber, formatParameters, gqaGroup, isDense, layerCount, modelSource, teachingSteps,
   type ArchitectureView, type DetailedArchitecture,
@@ -242,15 +242,15 @@ export function ModelArchitecturePage({ interval = 2, reduceMotion = false }: { 
       const controller = new AbortController(); active = controller;
       const timeout = setTimeout(() => controller.abort(), 4500);
       try {
-        const telemetry = await getTelemetry(controller.signal);
+        const metadata = await getModelArchitecture(controller.signal);
         if (stopped || document.hidden || controller.signal.aborted) return;
-        setArchitecture(telemetry.inference?.architecture ?? null);
+        setArchitecture(metadata);
         setLoaded(true); setConnected(true); setError("");
       } catch {
         if (!stopped && !document.hidden && controller.signal.reason !== "hidden") { setConnected(false); setError("架构连接中断，保留上次元数据，正在重连…"); }
       } finally {
         clearTimeout(timeout); active = null;
-        if (!stopped && !document.hidden) timer = setTimeout(() => void poll(), Math.max(.5, interval) * 1000);
+        if (!stopped && !document.hidden) timer = setTimeout(() => void poll(), Math.max(5, interval) * 1000);
       }
     }
     function visibility() { clearTimeout(timer); if (document.hidden) active?.abort("hidden"); else void poll(); }

@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { getTelemetry } from "../../lib/api";
-import type { GpuSample, TelemetrySample, TelemetrySnapshot } from "../../types";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { getGpuTelemetry, getInferenceTelemetry } from "../../lib/api";
+import type { GpuSample, InferenceSnapshot, TelemetrySample, TelemetrySnapshot } from "../../types";
+import { mergeGpuSamples } from "../../lib/gpuSamples";
 import { InferenceDashboard } from "./InferenceDashboard";
 
 interface Metric { key: keyof GpuSample; label: string; unit: string; scale: (gpu: GpuSample) => number; convert?: number }
@@ -50,10 +51,19 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
   const tabButtons = useRef<(HTMLButtonElement | null)[]>([]);
   const [samples, setSamples] = useState<TelemetrySample[]>([]);
   const [latest, setLatest] = useState<TelemetrySnapshot | null>(null);
+  const latestGpu = useRef<TelemetrySnapshot | null>(null);
+  const [inference, setInference] = useState<InferenceSnapshot | null>(null);
+  const visibleSamples = useMemo(() => {
+    const end = samples.at(-1)?.timestamp ?? 0;
+    return samples.filter((sample) => sample.timestamp >= end - windowSeconds);
+  }, [samples, windowSeconds]);
+  const effectiveInterval = Math.max(interval, latest?.provider_interval ?? 0);
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(true);
   useEffect(() => {
     let stopped = false;
+    setError("");
+    setConnected(true);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let active: AbortController | null = null;
     async function poll() {
@@ -61,19 +71,31 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
       const controller = new AbortController(); active = controller;
       const timeout = setTimeout(() => controller.abort(), 4500);
       try {
-        const sample = await getTelemetry(controller.signal);
-        if (stopped || document.hidden || controller.signal.aborted) return;
-        setLatest(sample); setError(""); setConnected(true);
-        setSamples((sample.samples || [sample]).filter((item) => item.timestamp >= sample.timestamp - windowSeconds));
+        if (view === "gpu") {
+          const previous = latestGpu.current;
+          const sample = await getGpuTelemetry(controller.signal, previous?.cursor, previous?.session_id);
+          if (stopped || document.hidden || controller.signal.aborted) return;
+          setSamples((current) => mergeGpuSamples(current, sample, previous?.session_id));
+          latestGpu.current = sample;
+          setLatest(sample);
+        } else {
+          const snapshot = await getInferenceTelemetry(controller.signal);
+          if (stopped || document.hidden || controller.signal.aborted) return;
+          setInference(snapshot);
+        }
+        setError(""); setConnected(true);
       } catch {
         if (!stopped && !document.hidden && controller.signal.reason !== "hidden") {
           setError("监测连接中断，图表保留上次数据，正在重连…");
           setConnected(false);
-          setSamples((previous) => [...previous, { timestamp: Date.now() / 1000, gpus: [], message: "" }].slice(-601));
+          if (view === "gpu") setSamples((previous) => {
+            const timestamp = Date.now() / 1000;
+            return [...previous.filter((sample) => sample.timestamp >= timestamp - 300), { timestamp, gpus: [], message: "" }].slice(-601);
+          });
         }
       } finally {
         clearTimeout(timeout); active = null;
-        if (!stopped && !document.hidden) timer = setTimeout(() => void poll(), interval * 1000);
+        if (!stopped && !document.hidden) timer = setTimeout(() => void poll(), Math.max(interval, view === "gpu" ? latestGpu.current?.provider_interval ?? 0 : 0) * 1000);
       }
     }
     function visibility() {
@@ -83,7 +105,7 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
     document.addEventListener("visibilitychange", visibility);
     void poll();
     return () => { stopped = true; clearTimeout(timer); active?.abort(); document.removeEventListener("visibilitychange", visibility); };
-  }, [interval, windowSeconds]);
+  }, [interval, view]);
   function changeTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     const target = event.key === "ArrowRight" ? (index + 1) % 2
       : event.key === "ArrowLeft" ? (index - 1 + 2) % 2
@@ -99,12 +121,13 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
     </div>
     {error && <p className="monitor-notice" role="status">{error}</p>}
     <div role="tabpanel" id={`${tabId}-inference-panel`} aria-labelledby={`${tabId}-inference-tab`} hidden={view !== "inference"} tabIndex={0}>
-      {view === "inference" && (latest ? <InferenceDashboard inference={latest.inference} connected={connected} /> : !error && <p className="empty-hint">正在读取推理监测…</p>)}
+      {view === "inference" && (inference ? <InferenceDashboard inference={inference} connected={connected} /> : !error && <p className="empty-hint">正在读取推理监测…</p>)}
     </div>
     <div role="tabpanel" id={`${tabId}-gpu-panel`} aria-labelledby={`${tabId}-gpu-tab`} hidden={view !== "gpu"} tabIndex={0}>
       {view === "gpu" && <>
+        {latest?.provider_message && <p className="monitor-notice">采样来源：{latest.provider || "暂不可用"} · {latest.provider_message}</p>}
         {latest?.message && <p className="monitor-notice" role="status">{latest.message}</p>}
-        {latest?.gpus.map((gpu) => <section key={gpu.id} className="gpu-section"><header className="gpu-heading"><h2>{gpu.name}</h2><span>{error || latest.message ? "数据暂不可用 · " : ""}每 {interval} 秒刷新 · {new Date(latest.timestamp * 1000).toLocaleTimeString()} · 最近 {windowSeconds / 60} 分钟</span></header><div className="metrics-grid">{metrics.map((metric) => <Trend key={metric.key} samples={samples} gpu={gpu} metric={metric} windowSeconds={windowSeconds} />)}</div></section>)}
+        {latest?.gpus.map((gpu) => <section key={gpu.id} className="gpu-section"><header className="gpu-heading"><h2>{gpu.name}</h2><span>{error || latest.message ? "数据暂不可用 · " : ""}每 {effectiveInterval} 秒刷新 · {new Date(latest.timestamp * 1000).toLocaleTimeString()} · 最近 {windowSeconds / 60} 分钟</span></header><div className="metrics-grid">{metrics.map((metric) => <Trend key={metric.key} samples={visibleSamples} gpu={gpu} metric={metric} windowSeconds={windowSeconds} />)}</div></section>)}
         {!latest && !error && <p className="empty-hint">正在读取显卡…</p>}
         {latest && !latest.gpus.length && <p className="empty-hint">监测不可用不影响本地翻译。支持的数值恢复后会自动更新。</p>}
       </>}

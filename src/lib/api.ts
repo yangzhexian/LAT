@@ -2,6 +2,9 @@ import type {
   DownloadEnvironment,
   DownloadEvent,
   LocalStatus,
+  ModelArchitecture,
+  InferenceSnapshot,
+  TelemetrySnapshot,
   StreamEvent,
   TranslationRequest,
 } from "../types";
@@ -37,8 +40,9 @@ interface GatewaySession { url: string; token: string; instance_id: string; prot
 let gatewaySession: GatewaySession | null = null;
 let pendingSession: Promise<GatewaySession> | null = null;
 let sessionGeneration = 0;
+let architectureCache: { etag: string | null; value: ModelArchitecture | null } | null = null;
 
-export function invalidateGatewaySession(): void { sessionGeneration++; gatewaySession = null; pendingSession = null; }
+export function invalidateGatewaySession(): void { sessionGeneration++; gatewaySession = null; pendingSession = null; architectureCache = null; }
 
 async function gatewayFetch(path: string, init?: RequestInit): Promise<Response> {
   let base = GATEWAY_URL;
@@ -276,6 +280,31 @@ export async function translateStream(
 
 export function getTelemetry(signal?: AbortSignal): Promise<import("../types").TelemetrySnapshot> {
   return request("/admin/telemetry", { signal });
+}
+
+export function getGpuTelemetry(signal?: AbortSignal, cursor?: number | null, sessionId?: string): Promise<TelemetrySnapshot> {
+  const query = new URLSearchParams();
+  if (cursor != null) query.set("since", String(cursor));
+  if (sessionId) query.set("session_id", sessionId);
+  return request("/admin/telemetry/gpu" + (query.size ? `?${query}` : ""), { signal });
+}
+
+export function getInferenceTelemetry(signal?: AbortSignal): Promise<InferenceSnapshot> {
+  return request("/admin/telemetry/inference", { signal });
+}
+
+export async function getModelArchitecture(signal?: AbortSignal): Promise<ModelArchitecture | null> {
+  const generation = sessionGeneration;
+  const cached = architectureCache;
+  const headers = cached?.etag ? { "If-None-Match": cached.etag } : undefined;
+  const response = await gatewayFetch("/admin/architecture", { signal, headers });
+  if (generation !== sessionGeneration || signal?.aborted) throw new GatewayError("架构请求已失效", "session_changed");
+  if (response.status === 304 && cached) return cached.value;
+  if (!response.ok) throw await responseError(response, "读取模型架构失败");
+  const body = await response.json() as { architecture?: ModelArchitecture };
+  if (generation !== sessionGeneration || signal?.aborted) throw new GatewayError("架构请求已失效", "session_changed");
+  architectureCache = { etag: response.headers.get("ETag"), value: body.architecture ?? null };
+  return architectureCache.value;
 }
 
 export function setTelemetryInterval(interval: number, signal?: AbortSignal): Promise<unknown> {
