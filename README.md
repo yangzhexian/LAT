@@ -4,7 +4,7 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.2.1-beta.5`（第一轮稳定性验收版）
+> 当前版本：`0.2.1-beta.6`（第二轮性能验收版）
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
@@ -43,11 +43,13 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 
 划选本身只显示图标，主动触发后才运行本地翻译。UIA 取词失败时，启用“允许复制兜底”可以在主动操作后模拟一次复制；剪贴板格式无法安全保护、无选区或目标不支持时请手动复制并粘贴到浮窗。不会持续监听剪贴板。扫描 PDF/图片需要 OCR，不在本版范围内；管理员权限软件与自绘控件的取词能力受系统及目标程序限制。
 
-浮窗最多直接翻译 5,000 个 Unicode 字符，更长内容可完整转入主窗口。主窗口内容替换前会确认。模型未启用时不会自动加载；主窗口正翻译长文时显示忙碌，稍后手动重试。关闭浮窗仅取消它自己的请求。完整成功结果遵守现有历史开关和容量设置，标记为“划词翻译”。
+浮窗最多直接翻译 5,000 个 Unicode 字符，更长内容可完整转入主窗口。主窗口内容替换前会确认。模型未启用时不会自动加载；主窗口正翻译长文时，浮窗显示排队位置，在通过校验的分段之间获得执行机会。关闭浮窗仅取消它自己的请求。完整成功结果遵守现有历史开关和容量设置，标记为“划词翻译”。
 
 固定浮窗后再次划词会更新原文和译文，并保留你调整后的窗口位置与尺寸；取消固定后恢复跟随新选区定位。
 
-本版完成模型生命周期、取消链路与网关会话管理的第一轮稳定性改进，详见 [beta.5 发布说明](docs/releases/v0.2.1-beta.5.md)、[运行时设计](docs/design/runtime-stability.md) 和 [验收清单](docs/acceptance/lat-runtime-stability-checklist.md)。模型架构与推理看板的既有功能继续保留，见 [模型架构浏览设计](docs/design/model-architecture.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md)。
+本版在第一轮稳定性改进之上增加分段调度、NVML GPU 采集、按页面拆分的遥测接口及长文渲染优化，详见 [beta.6 发布说明](docs/releases/v0.2.1-beta.6.md)、[第二轮性能设计](docs/design/performance-round2.md) 和 [验收清单](docs/acceptance/lat-performance-checklist.md)。此前的 [运行时设计](docs/design/runtime-stability.md)、[模型架构浏览设计](docs/design/model-architecture.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md) 继续适用，第二轮文档说明变更的数据接口。
+
+主窗口的 LaTeX 预览最多排版前 4,000 个 UTF-16 字符、40 个完整公式，遇到未闭合公式时在其前停止，并显示范围提示；“文本”视图、复制及历史始终保留全文。GPU 历史从网关启动持续采集，原生 NVML 不可用时自动使用较低频率的兼容采集，并显示实际周期。
 
 beta.1 的用户验收记录已保留；beta.2 修复浮标首次点击、鼠标延迟与浮窗圆角，等待针对这些问题复验。兼容性记录见 [划词翻译验收清单](docs/acceptance/lat-selection-translation-checklist.md)，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
 
@@ -177,6 +179,12 @@ npm run build:installer
 | `top_k` | `20` | Top-k 采样参数 |
 | `repetition_penalty` | `1.05` | 重复惩罚 |
 | `num_ctx` | `8192` | 上下文长度 |
+| `batch_size` / `ubatch_size` | `2048` / `512` | 输入逻辑批次与物理微批次；`LAT_BATCH_SIZE` / `LAT_UBATCH_SIZE` |
+| `flash_attention` | `auto` | `auto`、`on` 或 `off`；`LAT_FLASH_ATTENTION` |
+| `kv_cache_type` | `f16` | `f16` 或可选 `q8_0`，更改后重启模型；`LAT_KV_CACHE_TYPE` |
+| `cache_prompt` | `true` | 复用模型输入公共前缀缓存；`LAT_CACHE_PROMPT` |
+| `max_pending_translations` | `8` | 一个执行任务之外的等待名额，范围 1–32；`LAT_MAX_PENDING_TRANSLATIONS` |
+| `queue_wait_timeout_seconds` | `120` | 每次等待推理机会的时限，超时保留已完成分段；`LAT_QUEUE_WAIT_TIMEOUT` |
 | `max_output_tokens` | `4096` | 每段最大输出 token 数 |
 | `max_input_chars` | `100000` | 整篇输入字符上限，可用 `LLM_TRANSLATOR_MAX_INPUT_CHARS` 覆盖 |
 | `admin_token` | 空 | 手动网关管理密钥，可用 `LAT_ADMIN_TOKEN` 覆盖；桌面版自动设置 |
