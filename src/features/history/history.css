@@ -1,0 +1,15 @@
+.history-filters { display: grid; grid-template-columns: minmax(200px, 2fr) repeat(4, minmax(100px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.history-filters label { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 12px; color: var(--muted); }
+.history-filters input, .history-filters select { box-sizing: border-box; width: 100%; min-width: 0; height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--reading); color: var(--text); }
+.history-toolbar, .history-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.history-toolbar > span { margin-left: auto; color: var(--muted); font-size: 12px; }
+.history-page-count { color: var(--muted); font-size: 12px; }
+.history-pagination { justify-content: center; padding: 12px 0; font-size: 13px; }
+.history-grid .history-card.is-expanded { grid-column: 1 / -1; }
+.history-expand { align-self: flex-start; color: var(--accent); }
+.history-card .history-translation-excerpt { color: var(--muted); margin-top: 0; }
+.history-page .ui-notice { margin-bottom: 16px; }
+.history-page .ui-notice button { margin-left: 12px; }
+.history-text { overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .history-search { grid-column: 1 / -1; } }
+@media (max-width: 600px) { .history-toolbar > span { width: 100%; margin-left: 0; } }

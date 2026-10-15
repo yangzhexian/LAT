@@ -1,6 +1,6 @@
 import { ModelDashboard } from "../model-monitor/ModelDashboard";
 import { ModelArchitecturePage } from "../model-architecture/ModelArchitecturePage";
-import { Button, DangerButton } from "../../components/Controls";
+import { Button, DangerButton, Notice } from "../../components/Controls";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cancelTranslation, translateStream } from "../../lib/api";
 import { languageName } from "../../lib/languages";
@@ -12,8 +12,9 @@ import type {
   TranslationMetrics,
   UserSettings,
 } from "../../types";
-import { readHistory, updateHistory, type TranslationHistory } from "../../lib/history";
+import { getHistoryStats, updateHistory, type TranslationHistory } from "../../lib/history";
 import { Icon, type IconName } from "../../components/Icon";
+import { HistoryPage } from "../history/HistoryPage";
 import { SettingsPanel } from "./SettingsPanel";
 import { TextPane } from "./TextPane";
 import type { SelectionTransfer } from "../../lib/selectionIntegration";
@@ -70,7 +71,14 @@ export function TranslatorWorkspace({
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState<"translate" | "history" | "settings" | "model" | "architecture">(status.ready ? "translate" : "model");
   useEffect(() => { setPage((current) => current === "architecture" ? current : status.ready ? "translate" : "model"); }, [status.ready]);
-  const [history, setHistory] = useState<TranslationHistory[]>([]);
+  const [historyCount, setHistoryCount] = useState(0);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [historyUpdating, setHistoryUpdating] = useState(false);
+  const historyUpdateLock = useRef(false);
+  const historyTrimPending = useRef(false);
+  const failedHistoryAction = useRef<{ clear: true } | { trim: true } | null>(null);
+  const [pendingHistory, setPendingHistory] = useState<TranslationHistory[]>([]);
+  const appliedHistoryLimits = useRef([settings.historyLimit ?? 30, settings.historyStorageMiB ?? 64]);
   const [historyError, setHistoryError] = useState("");
   const historyPreferences = useRef(settings);
   historyPreferences.current = settings;
@@ -94,8 +102,12 @@ export function TranslatorWorkspace({
   }
   useEffect(() => () => { controller.current?.abort(); controller.current = null; }, []);
   async function refreshHistory() {
-    try { setHistory(await readHistory()); setHistoryError(""); }
-    catch { setHistoryError("无法读取本地历史记录"); }
+    setHistoryRevision((value) => value + 1);
+    try {
+      setHistoryCount((await getHistoryStats()).count);
+      if (!failedHistoryAction.current) setHistoryError("");
+    }
+    catch { setHistoryError("无法读取本地历史统计"); }
   }
   useEffect(() => { if (page === "history") void refreshHistory(); }, [page]);
   useEffect(() => {
@@ -103,12 +115,45 @@ export function TranslatorWorkspace({
     window.addEventListener("lat-history-changed", refresh);
     return () => window.removeEventListener("lat-history-changed", refresh);
   }, []);
+  function finishHistoryUpdate() {
+    historyUpdateLock.current = false; setHistoryUpdating(false);
+    if (historyTrimPending.current) { historyTrimPending.current = false; void applyHistoryAction({ trim: true }); }
+  }
+  async function applyHistoryAction(action: { clear: true } | { trim: true }) {
+    if (historyUpdateLock.current) { if ("trim" in action) historyTrimPending.current = true; return; }
+    historyUpdateLock.current = true; setHistoryUpdating(true);
+    try {
+      await updateHistory(action, historyPreferences.current.historyLimit ?? 30, (historyPreferences.current.historyStorageMiB ?? 64) * 1048576);
+      failedHistoryAction.current = null; setHistoryError(""); await refreshHistory();
+    } catch {
+      failedHistoryAction.current = action;
+      setHistoryError("历史记录更新失败，已有记录仍保留，请重试。");
+    } finally { finishHistoryUpdate(); }
+  }
+  useEffect(() => { void refreshHistory(); }, []);
   useEffect(() => {
-    void updateHistory({ trim: true }, settings.historyLimit ?? 30).then(refreshHistory).catch(() => setHistoryError("历史上限应用失败"));
-  }, [settings.historyLimit]);
-  async function removeHistory(id?: string) {
-    try { await updateHistory(id ? { remove: id } : { clear: true }); await refreshHistory(); }
-    catch { setHistoryError("历史记录更新失败"); }
+    const limits = [settings.historyLimit ?? 30, settings.historyStorageMiB ?? 64];
+    if (limits.every((value, index) => value === appliedHistoryLimits.current[index])) return;
+    appliedHistoryLimits.current = limits;
+    void applyHistoryAction({ trim: true });
+  }, [settings.historyLimit, settings.historyStorageMiB]);
+  async function removeHistory(id: string) {
+    if (busyRef.current || modelBusy || selectionBusy || historyUpdateLock.current) return;
+    historyUpdateLock.current = true; setHistoryUpdating(true);
+    try {
+      await updateHistory({ remove: id }, historyPreferences.current.historyLimit ?? 30, (historyPreferences.current.historyStorageMiB ?? 64) * 1048576);
+      setHistoryError(""); await refreshHistory();
+    } finally { finishHistoryUpdate(); }
+  }
+  async function retryHistorySave() {
+    const record = pendingHistory[0];
+    if (!record || historyUpdateLock.current) return;
+    historyUpdateLock.current = true; setHistoryUpdating(true);
+    try {
+      await updateHistory({ add: record }, historyPreferences.current.historyLimit ?? 30, (historyPreferences.current.historyStorageMiB ?? 64) * 1048576);
+      setPendingHistory((current) => current.filter((row) => row.id !== record.id)); setMessage("历史记录已保存到本机"); await refreshHistory();
+    } catch { setMessage("历史记录仍未保存，可再次重试；工作区全文保留。"); }
+    finally { finishHistoryUpdate(); }
   }
   function restoreHistory(row: TranslationHistory) {
     if (busyRef.current || modelBusy || selectionBusy) return;
@@ -218,15 +263,17 @@ export function TranslatorWorkspace({
       );
       const completed = finalEvent as StreamEvent | null;
       if (isCurrent() && completed && (historyPreferences.current.saveHistory ?? true)) {
-        try {
-          await updateHistory({ add: {
+        const record: TranslationHistory = {
+            origin: "workspace",
             id: completed.job_id || crypto.randomUUID(), createdAt: Date.now(), source, submittedText: normalized,
             translation: completed.translation || "", sourceLanguage, targetLanguage,
             model: completed.model || status.active_model || status.model_configured,
             metrics: completed.metrics,
-          } }, historyPreferences.current.historyLimit ?? 30);
-          await refreshHistory();
-        } catch { setMessage("翻译完成，但历史记录未能保存到本机"); }
+        };
+        try {
+          await updateHistory({ add: record }, historyPreferences.current.historyLimit ?? 30, (historyPreferences.current.historyStorageMiB ?? 64) * 1048576);
+          setPendingHistory((current) => current.filter((row) => row.id !== record.id)); await refreshHistory();
+        } catch { setPendingHistory((current) => [...current.filter((row) => row.id !== record.id), record]); setMessage("翻译完成，但历史记录未能保存到本机"); }
       }
     } catch (error) {
       if (isCurrent()) setMessage(activeController.signal.aborted ? "已取消，已完成分段保留，可继续翻译" : error instanceof Error ? error.message : String(error));
@@ -263,7 +310,7 @@ export function TranslatorWorkspace({
           <span>{status.active_model || status.resolved_model || status.model_configured}<small>{status.ready ? "本地运行 · 已就绪" : "模型未启用"}</small></span>
         </div>
         <div className="header-action">{page === "history" ?
-          <DangerButton disabled={!history.length} onClick={() => { if (window.confirm("清空全部翻译历史？此操作无法撤销。")) void removeHistory(); }}>清空历史</DangerButton> :
+          <DangerButton disabled={!historyCount || busy || modelBusy || selectionBusy || historyUpdating} onClick={() => { if (!busyRef.current && !modelBusy && !selectionBusy && window.confirm("清空全部翻译历史？此操作无法撤销。")) void applyHistoryAction({ clear: true }); }}>清空历史</DangerButton> :
           <DangerButton disabled={busy || modelBusy || selectionBusy || !status.ready} onClick={onDisable}>{modelBusy ? "正在关闭…" : selectionBusy ? "划词翻译中" : "关闭模型"}</DangerButton>}
         </div>
       </header>
@@ -274,6 +321,7 @@ export function TranslatorWorkspace({
       <div className="workspace-status" role="status">
         {busy || canResume ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段 · ${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}% · ${message}` : message}
       </div>
+      {pendingHistory.length > 0 && <Notice tone="error">有 {pendingHistory.length} 条完整翻译待保存，可逐条重试；退出应用后未保存的记录将丢失。<Button disabled={busy || historyUpdating} onClick={() => void retryHistorySave()}>重试保存历史</Button></Notice>}
       {(busy || canResume) && <progress className="translation-progress" aria-label="翻译总进度" max={progress?.total_chars || 1} value={progress?.completed_chars || 0} />}
       <div className={"workspace " + settings.layout}>
         <TextPane
@@ -334,17 +382,7 @@ export function TranslatorWorkspace({
       </footer>
       </div>
       {page === "settings" && <SettingsPanel settings={settings} onChange={onSettingsChange} onClose={() => setPage("translate")} selectionError={selectionError} selectionPaused={selectionPaused} />}
-      {page === "history" && <section className="history-page">
-        <p className="history-description">仅保存在本机 · 最近 {settings.historyLimit ?? 30} 条{settings.saveHistory === false ? " · 已暂停保存新记录" : ""}</p>
-        {historyError && <p role="alert">{historyError}</p>}
-        {!history.length && <p className="empty-hint">完成翻译后，记录会出现在这里。</p>}
-        <div className="history-grid">{history.map((row) => <article className="history-card" key={row.id}>
-          <div className="history-meta">{row.origin === "selection" ? "划词翻译 · " : ""}{new Date(row.createdAt).toLocaleString()} · {row.sourceLanguage} → {row.targetLanguage} · {row.model}</div>
-          <p className="history-excerpt">{row.source.slice(0, 180)}{row.source.length > 180 ? "…" : ""}</p>
-          <details><summary>查看完整记录</summary><div className="history-comparison"><section><h3>原文 · {languageName(row.sourceLanguage)}</h3><div className="history-text">{row.source}</div></section><section><h3>译文 · {languageName(row.targetLanguage)}</h3><div className="history-text">{row.translation}</div></section></div></details>
-          <div className="history-actions"><Button className="secondary-button" disabled={busy || modelBusy || selectionBusy} onClick={() => restoreHistory(row)}>恢复到工作区</Button><Button className="mini-button" onClick={() => void removeHistory(row.id)}>删除</Button></div>
-        </article>)}</div>
-      </section>}
+      {page === "history" && <HistoryPage settings={settings} revision={historyRevision} busy={busy || modelBusy || selectionBusy || historyUpdating} error={historyError} onRetry={() => { if (failedHistoryAction.current) void applyHistoryAction(failedHistoryAction.current); else void refreshHistory(); }} onRestore={restoreHistory} onRemove={removeHistory} />}
     </main>
   );
 }

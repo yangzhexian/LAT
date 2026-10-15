@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { JSDOM } from 'jsdom';
 import 'fake-indexeddb/auto';
+import { IDBObjectStore } from 'fake-indexeddb';
 
 test('main coordinates native rollback, cross-window history and transfer without duplicate writes', async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
@@ -81,10 +82,52 @@ test('main coordinates native rollback, cross-window history and transfer withou
     await send('selection-history', { requestId: 'request-1', row });
     assert.equal((await readHistory()).length, 1);
     assert.equal((await readHistory())[0].origin, 'selection');
-    assert.equal(emitted.filter((item) => item.name === 'selection-history-result').length, 1);
+    assert.equal(emitted.filter((item) => item.name === 'selection-history-result').length, 2, 'each duplicate gets an idempotent acknowledgement');
+    assert.equal(emitted.at(-1).payload.saved, true);
+
+    const originalPut = IDBObjectStore.prototype.put;
+    let writes = 0;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === 'translations') writes++;
+      return originalPut.apply(this, args);
+    };
+    try {
+      await React.act(async () => {
+        const concurrent = { ...row, id: 'concurrent' };
+        listeners.get('selection-history')({ payload: { requestId: 'concurrent-1', row: concurrent } });
+        listeners.get('selection-history')({ payload: { requestId: 'concurrent-2', row: concurrent } });
+        await settle();
+      });
+      assert.equal(writes, 1, 'concurrent duplicate deliveries share the same transaction');
+      assert.deepEqual(emitted.slice(-2).map((item) => [item.payload.requestId, item.payload.saved]), [['concurrent-1', true], ['concurrent-2', true]]);
+    } finally { IDBObjectStore.prototype.put = originalPut; }
+
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === 'summaries') throw new DOMException('quota exceeded', 'QuotaExceededError');
+      return originalPut.apply(this, args);
+    };
+    const retryRow = { ...row, id: 'retry-after-failure' };
+    try {
+      await send('selection-history', { requestId: 'failed', row: retryRow });
+      assert.equal(emitted.at(-1).payload.saved, false);
+      assert.match(emitted.at(-1).payload.error, /未能保存/);
+    } finally { IDBObjectStore.prototype.put = originalPut; }
+    assert.equal((await readHistory()).some((item) => item.id === retryRow.id), false);
+    await send('selection-history', { requestId: 'retried', row: retryRow });
+    assert.equal(emitted.at(-1).payload.saved, true);
+    assert.equal((await readHistory()).some((item) => item.id === retryRow.id), true);
+
+    await React.act(async () => { change({ historyStorageMiB: 1 / 1024 }); });
+    const oversized = { ...row, id: 'oversized', source: 'a'.repeat(2000) };
+    await send('selection-history', { requestId: 'oversized', row: oversized });
+    assert.equal(emitted.at(-1).payload.saved, false, 'selection respects the configured byte limit');
+    assert.equal((await readHistory()).length, 3, 'a rejected record preserves existing history');
+    await React.act(async () => { change({ historyStorageMiB: 64 }); });
+    await send('selection-history', { requestId: 'oversized-retry', row: oversized });
+    assert.equal(emitted.at(-1).payload.saved, true);
     await React.act(async () => { change({ saveHistory: false }); });
     await send('selection-history', { requestId: 'request-2', row: { ...row, id: 'not-saved' } });
-    assert.equal((await readHistory()).length, 1);
+    assert.equal((await readHistory()).length, 4);
     assert.equal(emitted.at(-1).payload.saved, false);
   } finally {
     await React.act(async () => root.unmount());

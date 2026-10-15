@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { EmptyState, Notice, Tabs } from "../../components/Controls";
 import { getGpuTelemetry, getInferenceTelemetry } from "../../lib/api";
 import type { GpuSample, InferenceSnapshot, TelemetrySample, TelemetrySnapshot } from "../../types";
 import { mergeGpuSamples } from "../../lib/gpuSamples";
@@ -48,7 +49,6 @@ function Trend({ samples, gpu, metric, windowSeconds }: { samples: TelemetrySamp
 export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval?: number; windowSeconds?: number; reduceMotion?: boolean }) {
   const [view, setView] = useState<"inference" | "gpu">("inference");
   const tabId = useId();
-  const tabButtons = useRef<(HTMLButtonElement | null)[]>([]);
   const [samples, setSamples] = useState<TelemetrySample[]>([]);
   const [latest, setLatest] = useState<TelemetrySnapshot | null>(null);
   const latestGpu = useRef<TelemetrySnapshot | null>(null);
@@ -106,30 +106,20 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
     void poll();
     return () => { stopped = true; clearTimeout(timer); active?.abort(); document.removeEventListener("visibilitychange", visibility); };
   }, [interval, view]);
-  function changeTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const target = event.key === "ArrowRight" ? (index + 1) % 2
-      : event.key === "ArrowLeft" ? (index - 1 + 2) % 2
-        : event.key === "Home" ? 0 : event.key === "End" ? 1 : null;
-    if (target === null) return;
-    event.preventDefault();
-    setView(target === 0 ? "inference" : "gpu");
-    tabButtons.current[target]?.focus();
-  }
   return <div className="model-dashboard">
-    <div className="preview-tabs monitor-tabs" role="tablist" aria-label="性能监测视图">
-      {(["inference", "gpu"] as const).map((tab, index) => <button key={tab} type="button" role="tab" id={`${tabId}-${tab}-tab`} aria-controls={`${tabId}-${tab}-panel`} aria-selected={view === tab} tabIndex={view === tab ? 0 : -1} ref={(button) => { tabButtons.current[index] = button; }} onClick={() => setView(tab)} onKeyDown={(event) => changeTab(event, index)}>{tab === "inference" ? "模型推理" : "GPU 硬件"}</button>)}
-    </div>
-    {error && <p className="monitor-notice" role="status">{error}</p>}
+    <Tabs id={tabId} label="性能监测视图" value={view} onChange={setView}
+      options={[{ value: "inference", label: "模型推理" }, { value: "gpu", label: "GPU 硬件" }]} className="preview-tabs monitor-tabs" />
+    {error && <Notice className="monitor-notice">{error}</Notice>}
     <div role="tabpanel" id={`${tabId}-inference-panel`} aria-labelledby={`${tabId}-inference-tab`} hidden={view !== "inference"} tabIndex={0}>
-      {view === "inference" && (inference ? <InferenceDashboard inference={inference} connected={connected} /> : !error && <p className="empty-hint">正在读取推理监测…</p>)}
+      {view === "inference" && (inference ? <InferenceDashboard inference={inference} connected={connected} /> : !error && <EmptyState title="正在读取推理监测…" />)}
     </div>
     <div role="tabpanel" id={`${tabId}-gpu-panel`} aria-labelledby={`${tabId}-gpu-tab`} hidden={view !== "gpu"} tabIndex={0}>
       {view === "gpu" && <>
-        {latest?.provider_message && <p className="monitor-notice">采样来源：{latest.provider || "暂不可用"} · {latest.provider_message}</p>}
-        {latest?.message && <p className="monitor-notice" role="status">{latest.message}</p>}
+        {latest?.provider_message && <Notice className="monitor-notice">采样来源：{latest.provider || "暂不可用"} · {latest.provider_message}</Notice>}
+        {latest?.message && <Notice className="monitor-notice">{latest.message}</Notice>}
         {latest?.gpus.map((gpu) => <section key={gpu.id} className="gpu-section"><header className="gpu-heading"><h2>{gpu.name}</h2><span>{error || latest.message ? "数据暂不可用 · " : ""}每 {effectiveInterval} 秒刷新 · {new Date(latest.timestamp * 1000).toLocaleTimeString()} · 最近 {windowSeconds / 60} 分钟</span></header><div className="metrics-grid">{metrics.map((metric) => <Trend key={metric.key} samples={visibleSamples} gpu={gpu} metric={metric} windowSeconds={windowSeconds} />)}</div></section>)}
-        {!latest && !error && <p className="empty-hint">正在读取显卡…</p>}
-        {latest && !latest.gpus.length && <p className="empty-hint">监测不可用不影响本地翻译。支持的数值恢复后会自动更新。</p>}
+        {!latest && !error && <EmptyState title="正在读取显卡…" />}
+        {latest && !latest.gpus.length && <EmptyState title="显卡监测暂不可用">本地翻译仍可使用，支持的数值恢复后会自动更新。</EmptyState>}
       </>}
     </div>
   </div>;

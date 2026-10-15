@@ -17,6 +17,10 @@ export function SettingsPanel({ settings, onChange, onClose, selectionError, sel
     if (value < (settings.historyLimit ?? 30) && !window.confirm(`改为 ${value} 条后，超出的旧记录将被删除。继续？`)) return;
     onChange({ historyLimit: value });
   }
+  function changeHistoryStorage(value: number) {
+    if (value < (settings.historyStorageMiB ?? 64) && !window.confirm(`改为 ${value} MiB 后，超出容量的旧记录将被删除。继续？`)) return;
+    onChange({ historyStorageMiB: value });
+  }
   return <div className="settings-page"><section className="settings-panel" aria-label="设置">
     <header className="settings-header">
       <div><p className="settings-kicker">LAT SETTINGS</p><h2>设置</h2><p>让工作区适合你的阅读习惯</p></div>
@@ -50,6 +54,7 @@ export function SettingsPanel({ settings, onChange, onClose, selectionError, sel
       <section className="settings-section"><h3>历史记录</h3>
         <Switch label="保存翻译历史" hint="关闭后不再保存新记录，已有记录保留" checked={settings.saveHistory ?? true} onChange={(saveHistory) => onChange({ saveHistory })} />
         <SelectField label="最多保存" hint="超出上限时淘汰最早的记录" value={settings.historyLimit ?? 30} onChange={changeHistoryLimit}>{[10, 30, 50, 100, 200].map((value) => <option key={value} value={value}>{value} 条</option>)}</SelectField>
+        <SelectField label="存储容量" hint="逻辑数据容量；超出时淘汰最早的记录" value={settings.historyStorageMiB ?? 64} onChange={changeHistoryStorage}>{[16, 32, 64, 128].map((value) => <option key={value} value={value}>{value} MiB</option>)}</SelectField>
       </section>
       <section className="settings-section"><h3>显卡看板</h3>
         <SelectField label="刷新间隔" hint="从应用启动持续采样" value={settings.telemetryInterval ?? 2} onChange={(telemetryInterval) => onChange({ telemetryInterval })}>{[0.5, 1, 2, 5].map((value) => <option key={value} value={value}>{value} 秒</option>)}</SelectField>

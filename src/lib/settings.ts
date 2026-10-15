@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   layout: "horizontal",
   reduceMotion: false,
   historyLimit: 30,
+  historyStorageMiB: 64,
   saveHistory: true,
   telemetryInterval: 2,
   telemetryWindow: 120,
@@ -26,7 +27,7 @@ function readSettings(): UserSettings {
   try {
     const stored = localStorage.getItem(SETTINGS_KEY);
     const settings = { ...DEFAULT_SETTINGS, ...(stored ? JSON.parse(stored) : {}) };
-    for (const [key, values] of Object.entries({ historyLimit: [10, 30, 50, 100, 200], telemetryInterval: [0.5, 1, 2, 5], telemetryWindow: [60, 120, 300] })) {
+    for (const [key, values] of Object.entries({ historyLimit: [10, 30, 50, 100, 200], historyStorageMiB: [16, 32, 64, 128], telemetryInterval: [0.5, 1, 2, 5], telemetryWindow: [60, 120, 300] })) {
       if (!values.includes(settings[key])) settings[key] = DEFAULT_SETTINGS[key as keyof UserSettings];
     }
     if (typeof settings.saveHistory !== "boolean") settings.saveHistory = true;

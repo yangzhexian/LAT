@@ -7,6 +7,7 @@ export interface UserSettings {
   layout: LayoutMode;
   reduceMotion: boolean;
   historyLimit: number;
+  historyStorageMiB?: number;
   saveHistory: boolean;
   telemetryInterval: number;
   telemetryWindow: number;

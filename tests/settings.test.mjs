@@ -34,6 +34,15 @@ test('settings capsules update preferences and reduced motion survives remount',
       select.value = '100'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     });
     assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).historyLimit, 100);
+    assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).historyStorageMiB, 64);
+    const storage = [...document.querySelectorAll('select')].find((item) => item.closest('label').textContent.includes('存储容量'));
+    const changeStorage = async (value) => React.act(async () => { storage.value = value; storage.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+    window.confirm = () => false;
+    await changeStorage('16');
+    assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).historyStorageMiB, 64, 'capacity reduction requires confirmation');
+    window.confirm = () => true;
+    await changeStorage('32');
+    assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).historyStorageMiB, 32);
     await React.act(async () => {
       const select = [...document.querySelectorAll('select')].find((item) => item.closest('label').textContent.includes('刷新间隔'));
       select.value = '0.5'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
@@ -50,6 +59,7 @@ test('settings capsules update preferences and reduced motion survives remount',
     await React.act(async () => root.unmount());
     root = createRoot(document.getElementById('root'));
     await React.act(async () => root.render(React.createElement(Harness)));
+    assert.equal(JSON.parse(localStorage.getItem('lat.settings.v1')).historyStorageMiB, 32);
     assert.equal(document.querySelector('[aria-label="减少动态效果"]').checked, true);
     assert.equal(document.querySelector('[aria-label="启用划词翻译"]').checked, true);
     assert.equal(document.querySelector('[aria-label="关闭到托盘"]').checked, false);

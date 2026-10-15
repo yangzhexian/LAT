@@ -66,7 +66,8 @@ export function useSelectionIntegration(settings: UserSettings, setSettings: Dis
     if (!window.__TAURI_INTERNALS__) return;
     let active = true;
     const remove: (() => void)[] = [];
-    const seen = new Set<string>();
+    const committed = new Set<string>();
+    const pending = new Map<string, Promise<{ saved: boolean; error?: string }>>();
     void (async () => {
       const { listen, emitTo } = await import("@tauri-apps/api/event");
       const attach = async <T,>(name: string, callback: (payload: T) => void) => {
@@ -82,24 +83,29 @@ export function useSelectionIntegration(settings: UserSettings, setSettings: Dis
       });
       await attach<{ requestId: string; row: TranslationHistory }>("selection-history", (payload) => {
         const historyId = payload.row?.id;
-        if (!historyId || seen.has(historyId)) return;
-        seen.add(historyId);
-        if (seen.size > 200) seen.delete(seen.values().next().value!);
-        const preferences = latest.current;
-        void (async () => {
-          let saved = false;
-          let failure: string | undefined;
-          try {
-            if (preferences.saveHistory) {
+        if (!historyId) return;
+        let operation = pending.get(historyId);
+        if (!operation) {
+          const preferences = latest.current;
+          operation = (async () => {
+            if (committed.has(historyId)) return { saved: true };
+            if (!preferences.saveHistory) return { saved: false };
+            try {
               const row = payload.row;
               if (!row || typeof row.source !== "string" || typeof row.translation !== "string" || !row.id) throw new Error("历史内容无效");
-              await updateHistory({ add: { ...row, origin: "selection" } }, preferences.historyLimit);
-              saved = true;
-              window.dispatchEvent(new Event("lat-history-changed"));
-            }
-          } catch { failure = "译文已完成，但历史记录未能保存到本机"; }
-          await emitTo("selection", "selection-history-result", { requestId: payload.requestId, saved, error: failure });
-        })().catch(() => {});
+              await updateHistory({ add: { ...row, origin: "selection" } }, preferences.historyLimit, (preferences.historyStorageMiB ?? 64) * 1024 * 1024);
+              // A failed transaction must remain retryable when the floating window resends it.
+              committed.add(historyId);
+              if (committed.size > 200) committed.delete(committed.values().next().value!);
+              window.dispatchEvent(new window.Event("lat-history-changed"));
+              return { saved: true };
+            } catch { return { saved: false, error: "译文已完成，但历史记录未能保存到本机" }; }
+          })();
+          pending.set(historyId, operation);
+          void operation.finally(() => pending.delete(historyId));
+        }
+        // Every delivery gets an acknowledgement; concurrent duplicates share one transaction.
+        void operation.then((result) => emitTo("selection", "selection-history-result", { requestId: payload.requestId, ...result })).catch(() => {});
       });
     })().catch((reason) => { if (active) setError("划词窗口通信失败：" + String(reason)); });
     return () => { active = false; remove.forEach((unlisten) => unlisten()); };
