@@ -42,7 +42,7 @@
 .ma-weight-share-track { height: 5px; border-radius: 5px; background: var(--line); }
 .ma-weight-share-track > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 .ma-weights table { margin-top: 12px; }
-.ma-weights .ma-weight-partial { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 10px; line-height: 1.7; }
+.ma-weights .ma-weight-partial { margin-top: 10px; }
 .ma-weight-matrix-unknown { display: grid; place-items: center; min-height: 200px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 12px; }
 .ma-weights button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 @media (max-width: 1100px) { .ma-weights.ma-tensors { padding: 21px 20px; } .ma-weight-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } .ma-weight-detail { gap: 22px; padding: 19px; } }

@@ -134,7 +134,7 @@ test('connections measure attached parent refs on first mount and refresh SVG pa
     assert.ok(first.getAttribute('d').startsWith('M60,190'), 'mounted source port is measured rather than a null parent ref');
     assert.ok([...overlay.querySelectorAll(':scope > path')].every((path) => path.getAttribute('d')), 'all actual ports have a drawn path');
     scale = 1.5;
-    await h.React.act(async () => window.dispatchEvent(new window.Event('resize')));
+    await h.React.act(async () => { window.dispatchEvent(new window.Event('resize')); await new Promise((resolve) => window.requestAnimationFrame(resolve)); });
     assert.equal(overlay.getAttribute('viewBox'), '0 0 1200 900');
     assert.ok(first.getAttribute('d').startsWith('M90,285'));
   } finally { await h.close(); }
@@ -228,4 +228,104 @@ test('close-up graphs connect the attention fork, normalized FFN input, residual
     assert.ok(document.querySelector('[aria-label="下一步"] svg'));
     assert.doesNotMatch(document.querySelector('.ma-playback-buttons').textContent, /[←→]/);
   } finally { await h.close(); }
+});
+
+test('geometry coalesces resize, observer and fonts per frame; highlights never measure and cleanup cancels late work', async () => {
+  let measurements = 0;
+  let nextFrame = 0;
+  let fontReady;
+  const frames = new Map();
+  const observers = [];
+  let fonts;
+  let fontsRemoved = 0;
+  const h = await harness({ architecture: fixture(), reduceMotion: true }, (surface) => {
+    surface.requestAnimationFrame = (callback) => { const id = ++nextFrame; frames.set(id, callback); return id; };
+    surface.cancelAnimationFrame = (id) => frames.delete(id);
+    surface.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this); }
+      observe() {}
+      disconnect() { this.disconnected = true; }
+    };
+    fonts = new surface.EventTarget();
+    fonts.status = 'loading';
+    fonts.ready = new Promise((resolve) => { fontReady = resolve; });
+    const remove = fonts.removeEventListener.bind(fonts);
+    fonts.removeEventListener = (...args) => { fontsRemoved++; remove(...args); };
+    Object.defineProperty(surface.document, 'fonts', { value: fonts });
+    surface.Element.prototype.getBoundingClientRect = function () {
+      measurements++;
+      const node = this.getAttribute('data-flow-node');
+      const index = node?.startsWith('book-') ? Number(node.slice(5)) : node === 'output' ? 34 : 0;
+      return { left: index * 50, top: 30, width: node ? 40 : 1800, height: node ? 100 : 600 };
+    };
+  });
+  const flush = async () => h.React.act(async () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)); });
+  try {
+    const initial = measurements;
+    assert.equal(initial, 35, 'container plus 34 flow nodes measured once on mount');
+    assert.equal(frames.size, 0, 'no redundant unconditional mount frame');
+    const originalPaths = [...document.querySelectorAll('.ma-connections > path')].map((path) => path.getAttribute('d'));
+    await h.click('[aria-label="下一步"]');
+    await h.render({ architecture: { ...fixture() }, reduceMotion: true });
+    assert.equal(measurements, initial, 'step highlight and unchanged metadata never read rectangles');
+    assert.deepEqual([...document.querySelectorAll('.ma-connections > path')].map((path) => path.getAttribute('d')), originalPaths);
+    assert.equal(document.querySelector('[data-connection="layer-1-to-2"]').dataset.active, 'true');
+    await h.React.act(async () => {
+      window.dispatchEvent(new window.Event('resize'));
+      window.dispatchEvent(new window.Event('resize'));
+      observers.forEach((observer) => observer.callback());
+      fonts.dispatchEvent(new window.Event('loadingdone'));
+      fontReady();
+      await Promise.resolve();
+    });
+    assert.equal(measurements, initial);
+    assert.equal(frames.size, 1, 'all notifications share one scheduled geometry refresh');
+    await flush();
+    assert.equal(measurements, initial * 2);
+    assert.equal(frames.size, 0);
+    window.dispatchEvent(new window.Event('resize'));
+    assert.equal(frames.size, 1);
+    const staleCallback = [...frames.values()][0];
+    await h.close();
+    assert.equal(frames.size, 0, 'unmount cancels pending frame');
+    assert.ok(observers.every((observer) => observer.disconnected));
+    assert.equal(fontsRemoved, 1);
+    staleCallback();
+    observers.forEach((observer) => observer.callback());
+    fontReady();
+    await Promise.resolve();
+    assert.equal(measurements, initial * 2, 'queued callbacks do not measure after unmount');
+    assert.equal(frames.size, 0);
+  } finally { if (document.querySelector('#root')?.childNodes.length) await h.close(); }
+});
+
+test('route and anchor changes invalidate geometry without losing arrow or residual semantics', async () => {
+  const { ArchitectureConnections } = await load();
+  const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost', pretendToBeVisual: true });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
+  let reads = 0;
+  dom.window.Element.prototype.getBoundingClientRect = function () {
+    reads++;
+    return this.getAttribute('data-flow-node') === 'b' ? { left: 200, top: 100, width: 40, height: 40 } : { left: 0, top: 0, width: 80, height: 60 };
+  };
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const root = createRoot(document.getElementById('root'));
+  function Fixture({ route, active }) {
+    const ref = React.useRef(null);
+    return React.createElement('div', { ref }, React.createElement(ArchitectureConnections, { containerRef: ref, edges: [{ id: 'residual', from: 'a', to: 'b', source: 'top', target: 'top', route, active, kind: 'residual' }] }), React.createElement('div', { 'data-flow-node': 'a' }), React.createElement('div', { 'data-flow-node': 'b' }));
+  }
+  try {
+    await React.act(async () => root.render(React.createElement(Fixture, { route: 'above' })));
+    const path = document.querySelector('[data-connection="residual"]');
+    const before = path.getAttribute('d');
+    assert.equal(reads, 3);
+    await React.act(async () => root.render(React.createElement(Fixture, { route: 'above', active: true })));
+    assert.equal(reads, 3);
+    await React.act(async () => root.render(React.createElement(Fixture, { route: 'below', active: true })));
+    assert.equal(reads, 6);
+    assert.notEqual(path.getAttribute('d'), before);
+    assert.equal(path.dataset.kind, 'residual');
+    assert.match(path.getAttribute('marker-end'), /^url\(#/);
+  } finally { await React.act(async () => root.unmount()); dom.window.close(); }
 });

@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { formatNumber, formatParameters, type BlockTensor, type DetailedArchitecture } from "./architectureModel";
 import { matrixLayout, tensorRole, tensorShare, tensorSummary } from "./tensorPresentation";
+import { EmptyState, Notice } from "../../components/Controls";
+import { defaultTensorNavigation, type TensorNavigation } from "../../lib/architectureNavigation";
 import "./weights.css";
 
 function TensorSymbol({ vector = false }: { vector?: boolean }) {
@@ -27,9 +29,12 @@ function TensorMatrix({ tensor }: { tensor: BlockTensor }) {
   </figure>;
 }
 
-export function TensorWeightsPanel({ architecture, layer }: { architecture: DetailedArchitecture; layer: number }) {
-  const [view, setView] = useState<"matrix" | "list">("matrix");
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+export function TensorWeightsPanel({ architecture, layer, navigation, onNavigationChange }: { architecture: DetailedArchitecture; layer: number; navigation?: TensorNavigation; onNavigationChange?: (next: TensorNavigation) => void }) {
+  const [localNavigation, setLocalNavigation] = useState(defaultTensorNavigation);
+  const { tab: view, selectedName } = navigation ?? localNavigation;
+  const update = (next: TensorNavigation) => { if (onNavigationChange) onNavigationChange(next); else setLocalNavigation(next); };
+  const setView = (tab: TensorNavigation["tab"]) => update({ tab, selectedName });
+  const setSelectedName = (name: string) => update({ tab: view, selectedName: name });
   const panelId = useId();
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const tensors = (architecture.block_tensors?.filter((tensor) => tensor.layer === layer) ?? []).slice().sort((a, b) => tensorRole(a.name).order - tensorRole(b.name).order || a.name.localeCompare(b.name));
@@ -37,7 +42,7 @@ export function TensorWeightsPanel({ architecture, layer }: { architecture: Deta
   const summary = tensorSummary(tensors);
   const share = selected ? tensorShare(selected, summary.elements) : null;
   const partial = architecture.block_tensors_truncated || summary.incomplete;
-  useEffect(() => { setSelectedName(null); setView("matrix"); }, [architecture.model, layer]);
+  useEffect(() => { setLocalNavigation(defaultTensorNavigation()); }, [architecture.model, layer]);
   function tabKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
@@ -68,9 +73,9 @@ export function TensorWeightsPanel({ architecture, layer }: { architecture: Deta
         </>}
       </div>
       <div role="tabpanel" id={`${panelId}-list-panel`} aria-labelledby={`${panelId}-list-tab`} hidden={view !== "list"}>{view === "list" && <table><thead><tr><th scope="col">张量</th><th scope="col">存储维度</th><th scope="col">元素数量</th></tr></thead><tbody>{tensors.map((tensor) => <tr key={tensor.name}><th scope="row">{tensor.name}</th><td>{tensor.shape.map(formatNumber).join(" × ") || "—"}</td><td>{formatNumber(tensor.elements)}</td></tr>)}</tbody></table>}</div>
-    </> : <p>{architecture.block_tensors_truncated ? "描述列表达到读取上限，该层形状可能未包含在当前响应中。" : "当前元数据未提供该层的张量形状。"}</p>}
-    {architecture.block_tensors_truncated && <p className="ma-weight-partial">张量描述列表已截断；当前展示不是全部存储张量。</p>}
-    {summary.incomplete && <p className="ma-weight-partial">部分元素数量未知；累计和占比只包含已知的存储元素。</p>}
+    </> : <EmptyState title="暂无参数形状">{architecture.block_tensors_truncated ? "描述列表达到读取上限，该层形状可能未包含在当前响应中。" : "当前元数据未提供该层的张量形状。"}</EmptyState>}
+    {architecture.block_tensors_truncated && <Notice className="ma-weight-partial">张量描述列表已截断；当前展示不是全部存储张量。</Notice>}
+    {summary.incomplete && <Notice className="ma-weight-partial">部分元素数量未知；累计和占比只包含已知的存储元素。</Notice>}
     <small>维度遵循 GGUF 原生存储顺序；不是标准矩阵行列展示，也不是实时权重值。矩阵格子只表达结构，不编码权重大小、正负或活跃状态。</small>
   </section>;
 }

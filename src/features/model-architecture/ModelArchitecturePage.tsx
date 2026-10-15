@@ -1,5 +1,7 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { getModelArchitecture } from "../../lib/api";
+import { EmptyState, Notice } from "../../components/Controls";
+import { architectureScrollContainer, architectureSignature, defaultArchitectureNavigation, defaultTensorNavigation, readArchitectureNavigation, writeArchitectureNavigation } from "../../lib/architectureNavigation";
 import {
   actualLayerCount, architectureSource, formatNumber, formatParameters, gqaGroup, isDense, layerCount, modelSource, teachingSteps,
   type ArchitectureView, type DetailedArchitecture,
@@ -152,9 +154,18 @@ function OutputDiagram({ architecture, step }: { architecture: DetailedArchitect
 }
 
 export function ArchitectureExplorer({ architecture, connected = true, reduceMotion = false }: { architecture: DetailedArchitecture; connected?: boolean; reduceMotion?: boolean }) {
-  const [view, setView] = useState<ArchitectureView>({ level: "overview", layer: 1 });
-  const [step, setStep] = useState(0);
-  const [playing, setPlaying] = useState(true);
+  const signature = useMemo(() => architectureSignature(architecture), [architecture]);
+  return <ArchitectureExplorerSession key={`${architecture.model}:${signature}`} architecture={architecture} connected={connected} reduceMotion={reduceMotion} signature={signature} />;
+}
+
+function ArchitectureExplorerSession({ architecture, connected, reduceMotion, signature }: { architecture: DetailedArchitecture; connected: boolean; reduceMotion: boolean; signature: string }) {
+  const [restored] = useState(() => readArchitectureNavigation(architecture, signature));
+  const [initial] = useState(() => restored ?? defaultArchitectureNavigation());
+  const [view, setView] = useState<ArchitectureView>(initial.view);
+  const [step, setStep] = useState(initial.step);
+  const [tensor, setTensor] = useState(initial.tensor);
+  // Returning to a saved teaching step never restarts playback unexpectedly.
+  const [playing, setPlaying] = useState(!restored);
   const [pullingLayer, setPullingLayer] = useState<number | null>(null);
   const { reduced, visible } = useMotionPreference(reduceMotion);
   const explorerRef = useRef<HTMLDivElement>(null);
@@ -167,6 +178,33 @@ export function ArchitectureExplorer({ architecture, connected = true, reduceMot
   const animating = playing && !reduced && visible && connected && architecture.available && pullingLayer == null;
   const count = layerCount(architecture);
   const actual = actualLayerCount(architecture);
+  const snapshot = useRef(initial);
+  useLayoutEffect(() => { snapshot.current = { ...snapshot.current, view, step: current, tensor }; }, [view, current, tensor]);
+  useLayoutEffect(() => {
+    if (!explorerRef.current) return;
+    const scroll = architectureScrollContainer(explorerRef.current);
+    const eventTarget = scroll === document.scrollingElement || scroll === document.documentElement ? document : scroll;
+    const save = () => {
+      snapshot.current = { ...snapshot.current, scrollTop: scroll.scrollTop, scrollLeft: scroll.scrollLeft };
+      writeArchitectureNavigation(architecture.model, signature, snapshot.current);
+    };
+    // All restored detail DOM is present before this layout effect, including the selected tensor tab.
+    scroll.scrollTop = initial.scrollTop;
+    scroll.scrollLeft = initial.scrollLeft;
+    let frame: number | null = null;
+    const onScroll = () => { if (frame === null) frame = window.requestAnimationFrame(() => { frame = null; save(); }); };
+    eventTarget.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      eventTarget.removeEventListener("scroll", onScroll);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      save();
+    };
+  }, [architecture.model, signature, initial]);
+  useEffect(() => { writeArchitectureNavigation(architecture.model, signature, snapshot.current); }, [architecture.model, signature, view, current, tensor]);
+  function changeView(next: ArchitectureView) {
+    if (next.layer !== view.layer) setTensor(defaultTensorNavigation());
+    setView(next); setStep(0);
+  }
   function finishExtraction() {
     const pending = extraction.current;
     if (!pending) return;
@@ -174,7 +212,7 @@ export function ArchitectureExplorer({ architecture, connected = true, reduceMot
     extraction.current = null;
     setPullingLayer(null);
     navigationPending.current = pending.focus;
-    setView(pending.next); setStep(0);
+    changeView(pending.next);
   }
   function navigate(next: ArchitectureView, focus = true) {
     if (extraction.current) return;
@@ -184,13 +222,8 @@ export function ArchitectureExplorer({ architecture, connected = true, reduceMot
       setPullingLayer(next.layer);
       return;
     }
-    navigationPending.current = focus; setView(next); setStep(0);
+    navigationPending.current = focus; changeView(next);
   }
-  useEffect(() => {
-    if (extraction.current) clearTimeout(extraction.current.timer);
-    extraction.current = null;
-    setPullingLayer(null); setView({ level: "overview", layer: 1 }); setStep(0);
-  }, [architecture.model, architecture.block_count]);
   useEffect(() => {
     if (reduced || !visible || !connected || !architecture.available) finishExtraction();
   }, [reduced, visible, connected, architecture.available]);
@@ -223,7 +256,7 @@ export function ArchitectureExplorer({ architecture, connected = true, reduceMot
       <ol className="ma-step-track" aria-label="计算步骤">{steps.map((item, index) => <li key={item.name}><button type="button" aria-current={current === index ? "step" : undefined} onClick={() => { setPlaying(false); setStep(index); }}><span>{String(index + 1).padStart(2, "0")}</span>{item.name}</button></li>)}</ol>
       <div className="ma-step-explanation" aria-live={animating ? "off" : "polite"}><strong>{steps[current].name}</strong><p>{steps[current].description}</p></div>
     </section>
-    {isLayer && <TensorWeightsPanel architecture={architecture} layer={view.layer} />}
+    {isLayer && <TensorWeightsPanel architecture={architecture} layer={view.layer} navigation={tensor} onNavigationChange={setTensor} />}
     <p className="ma-accuracy-note">维度与层数来自所选本地 GGUF。动画、矩阵纹理、候选条形与 token 占位是计算原理示意；没有读取权重值、激活值、实时逐层时序或注意力热力图。{!isDense(architecture) && " 当前架构身份尚未确认为 Hunyuan Dense，专属计算细节保留为通用示意。"}</p>
   </div>;
 }
@@ -258,9 +291,9 @@ export function ModelArchitecturePage({ interval = 2, reduceMotion = false }: { 
     void poll();
     return () => { stopped = true; clearTimeout(timer); active?.abort(); document.removeEventListener("visibilitychange", visibility); };
   }, [interval]);
-  return <div className="model-architecture-page"><header className="ma-page-heading"><div><span className="ma-kicker">EXPLORE THE MODEL</span><h1>模型架构</h1><p>从整体框架深入每一层，逐步理解 token 如何成为输出。</p></div><span className="ma-metadata-badge">{architecture?.available ? "本地 GGUF · 结构实读" : "本地模型 · 结构读取"}</span></header>
-    {error && <p className="ma-notice" role="status">{error}</p>}
-    {architecture?.available ? <><section className="ma-model-identity"><div><strong>{architecture.name || architecture.model}</strong><span>{architecture.model} · {architecture.architecture || "架构类型未知"}</span></div><Specs><Spec name="层数" value={formatNumber(architecture.block_count)} /><Spec name="隐藏维度" value={formatNumber(architecture.embedding_length)} /><Spec name="Q / KV heads" value={`${formatNumber(architecture.attention_heads)} / ${formatNumber(architecture.kv_heads)}`} /><Spec name="存储参数" value={formatParameters(architecture.parameter_count)} title="GGUF 存储张量元素总数，不等于活跃参数" /><Spec name="训练上下文" value={formatNumber(architecture.context_length)} title="GGUF 训练上下文容量，不是当前运行 num_ctx" /><Spec name="量化" value={architecture.quantization || "—"} /></Specs></section><ArchitectureExplorer architecture={architecture} connected={connected} reduceMotion={reduceMotion} /></> : <section className="ma-unavailable"><span aria-hidden="true">◇</span><h2>{loaded ? "暂未读取模型结构" : "正在读取模型结构…"}</h2><p>{architecture?.message || (loaded ? "选中模型的本地 GGUF 元数据暂不可用，或当前网关尚未提供架构信息。不会猜测层数或矩阵维度。" : "无需开始翻译，读取本地模型描述即可查看架构。")}</p></section>}
+  return <div className="model-architecture-page">
+    {error && <Notice className="ma-notice" tone="error">{error}</Notice>}
+    {architecture?.available ? <><section className="ma-model-identity"><div><strong>{architecture.name || architecture.model}</strong><span>{architecture.model} · {architecture.architecture || "架构类型未知"}</span></div><Specs><Spec name="层数" value={formatNumber(architecture.block_count)} /><Spec name="隐藏维度" value={formatNumber(architecture.embedding_length)} /><Spec name="Q / KV heads" value={`${formatNumber(architecture.attention_heads)} / ${formatNumber(architecture.kv_heads)}`} /><Spec name="存储参数" value={formatParameters(architecture.parameter_count)} title="GGUF 存储张量元素总数，不等于活跃参数" /><Spec name="训练上下文" value={formatNumber(architecture.context_length)} title="GGUF 训练上下文容量，不是当前运行 num_ctx" /><Spec name="量化" value={architecture.quantization || "—"} /></Specs></section><ArchitectureExplorer architecture={architecture} connected={connected} reduceMotion={reduceMotion} /></> : <EmptyState className="ma-unavailable" title={loaded ? "暂未读取模型结构" : "正在读取模型结构…"}>{architecture?.message || (loaded ? "选中模型的本地 GGUF 元数据暂不可用，或当前网关尚未提供架构信息。不会猜测层数或矩阵维度。" : "无需开始翻译，读取本地模型描述即可查看架构。")}</EmptyState>}
     <footer className="ma-sources"><span>计算路径参考</span><a href={architectureSource} target="_blank" rel="noreferrer">Hunyuan Dense 官方实现 <ArchitectureArrow direction="external" size={12} /></a><a href={/7b/i.test(architecture?.model ?? "") ? modelSource.replace("1.8B", "7B") : modelSource} target="_blank" rel="noreferrer">Tencent {/7b/i.test(architecture?.model ?? "") ? "7B" : "1.8B"} 参考配置 <ArchitectureArrow direction="external" size={12} /></a></footer>
   </div>;
 }

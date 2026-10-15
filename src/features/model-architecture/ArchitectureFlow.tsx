@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type RefObject } from "react";
+import { useEffect, useId, useMemo, useState, type RefObject } from "react";
 
 export function ArchitectureArrow({ direction = "right", size = 14, className = "" }: { direction?: "right" | "left" | "external" | "chevron"; size?: number; className?: string }) {
   const paths = { right: "M4 12h15m-5-5 5 5-5 5", left: "M20 12H5m5-5-5 5 5 5", external: "M7 17 17 7M7 7h10v10", chevron: "m9 6 6 6-6 6" };
@@ -22,13 +22,24 @@ export interface FlowEdge {
   active?: boolean;
 }
 export interface FlowRect { left: number; top: number; width: number; height: number }
+interface FlowBounds { top: number; bottom: number; right: number }
 const round = (value: number) => Number(value.toFixed(2));
+
+export function connectionBounds(rectangles: Record<string, FlowRect>): FlowBounds {
+  let top = Infinity, bottom = -Infinity, right = -Infinity;
+  for (const rect of Object.values(rectangles)) {
+    top = Math.min(top, rect.top);
+    bottom = Math.max(bottom, rect.top + rect.height);
+    right = Math.max(right, rect.left + rect.width);
+  }
+  return { top, bottom, right };
+}
 
 function anchor(rect: FlowRect, side: FlowAnchor) {
   return { x: round(side === "left" ? rect.left : side === "right" ? rect.left + rect.width : rect.left + rect.width / 2), y: round(side === "top" ? rect.top : side === "bottom" ? rect.top + rect.height : rect.top + rect.height / 2) };
 }
 
-export function connectionPath(edge: FlowEdge, rectangles: Record<string, FlowRect>) {
+export function connectionPath(edge: FlowEdge, rectangles: Record<string, FlowRect>, bounds = connectionBounds(rectangles)) {
   const from = rectangles[edge.from];
   const to = rectangles[edge.to];
   if (!from || !to) return "";
@@ -41,11 +52,10 @@ export function connectionPath(edge: FlowEdge, rectangles: Record<string, FlowRe
   const target = edge.target ?? (stacked ? below ? "top" : "bottom" : "left");
   const start = anchor(from, source);
   const end = anchor(to, target);
-  const bounds = Object.values(rectangles);
   const offset = edge.offset ?? 12;
-  const top = round(Math.min(...bounds.map((rect) => rect.top)) - offset);
-  const bottom = round(Math.max(...bounds.map((rect) => rect.top + rect.height)) + offset);
-  const right = round(Math.max(...bounds.map((rect) => rect.left + rect.width)) + offset);
+  const top = round(bounds.top - offset);
+  const bottom = round(bounds.bottom + offset);
+  const right = round(bounds.right + offset);
   const begin = `M${start.x},${start.y}`;
   if (edge.route === "above") return `${begin} V${top} H${end.x} V${end.y}`;
   if (edge.route === "below") return `${begin} V${bottom} H${end.x} V${end.y}`;
@@ -93,12 +103,16 @@ export function layerFlowEdges(step = 0): FlowEdge[] {
 export function ArchitectureConnections({ containerRef, edges }: { containerRef: RefObject<HTMLDivElement | null>; edges: FlowEdge[] }) {
   const marker = useId().replace(/:/g, "");
   const [layout, setLayout] = useState<{ width: number; height: number; rectangles: Record<string, FlowRect> }>({ width: 1, height: 1, rectangles: {} });
-  const signature = edges.map((edge) => `${edge.id}:${edge.from}:${edge.to}`).join("|");
+  // Active steps change every animation tick; they never invalidate geometry.
+  const signature = JSON.stringify(edges.map(({ active: _active, ...geometry }) => geometry));
+  const geometry = useMemo(() => JSON.parse(signature) as FlowEdge[], [signature]);
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     let stopped = false;
+    let frame: number | null = null;
     const refresh = () => {
+      frame = null;
       if (stopped) return;
       const outer = container.getBoundingClientRect();
       if (!outer.width || !outer.height) return;
@@ -107,20 +121,32 @@ export function ArchitectureConnections({ containerRef, edges }: { containerRef:
         const rect = node.getBoundingClientRect();
         rectangles[node.dataset.flowNode!] = { left: rect.left - outer.left, top: rect.top - outer.top, width: rect.width, height: rect.height };
       });
-      setLayout({ width: outer.width, height: outer.height, rectangles });
+      setLayout((previous) => {
+        const keys = Object.keys(rectangles);
+        if (previous.width === outer.width && previous.height === outer.height && keys.length === Object.keys(previous.rectangles).length && keys.every((key) => {
+          const before = previous.rectangles[key], after = rectangles[key];
+          return before && before.left === after.left && before.top === after.top && before.width === after.width && before.height === after.height;
+        })) return previous;
+        return { width: outer.width, height: outer.height, rectangles };
+      });
     };
+    const schedule = () => { if (!stopped && frame === null) frame = window.requestAnimationFrame(refresh); };
     refresh();
-    const observer = typeof window.ResizeObserver === "function" ? new window.ResizeObserver(refresh) : null;
+    const observer = typeof window.ResizeObserver === "function" ? new window.ResizeObserver(schedule) : null;
     observer?.observe(container);
     container.querySelectorAll<HTMLElement>("[data-flow-node]").forEach((node) => observer?.observe(node));
-    window.addEventListener("resize", refresh);
-    const frame = window.requestAnimationFrame?.(refresh);
-    void document.fonts?.ready.then(refresh);
-    return () => { stopped = true; observer?.disconnect(); window.removeEventListener("resize", refresh); if (frame != null) window.cancelAnimationFrame(frame); };
+    window.addEventListener("resize", schedule);
+    document.fonts?.addEventListener("loadingdone", schedule);
+    if (document.fonts?.status === "loading") void document.fonts.ready.then(schedule);
+    return () => { stopped = true; observer?.disconnect(); window.removeEventListener("resize", schedule); document.fonts?.removeEventListener("loadingdone", schedule); if (frame !== null) window.cancelAnimationFrame(frame); };
   }, [containerRef, signature]);
+  const paths = useMemo(() => {
+    const bounds = connectionBounds(layout.rectangles);
+    return geometry.map((edge) => connectionPath(edge, layout.rectangles, bounds));
+  }, [geometry, layout]);
   return <svg className="ma-connections" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="none" aria-hidden="true">
     <defs><marker id={marker} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="m2 2 6 3-6 3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></marker></defs>
-    {edges.map((edge) => <path key={edge.id} data-connection={edge.id} data-from={edge.from} data-to={edge.to} data-kind={edge.kind ?? "main"} data-active={Boolean(edge.active)} d={connectionPath(edge, layout.rectangles)} markerEnd={`url(#${marker})`} />)}
+    {edges.map((edge, index) => <path key={edge.id} data-connection={edge.id} data-from={edge.from} data-to={edge.to} data-kind={edge.kind ?? "main"} data-active={Boolean(edge.active)} d={paths[index]} markerEnd={`url(#${marker})`} />)}
   </svg>;
 }
 

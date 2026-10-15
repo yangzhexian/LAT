@@ -19,7 +19,7 @@ const fixture = () => ({
 let bundle;
 async function load() {
   if (!bundle) {
-    await build({ stdin: { contents: 'export * from "./src/features/model-architecture/ModelArchitecturePage"; export * from "./src/features/model-architecture/architectureModel";', resolveDir: process.cwd() }, outfile: 'artifacts/validation/model-architecture-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' } });
+    await build({ stdin: { contents: 'export * from "./src/features/model-architecture/ModelArchitecturePage"; export * from "./src/features/model-architecture/architectureModel"; export * from "./src/lib/architectureNavigation";', resolveDir: process.cwd() }, outfile: 'artifacts/validation/model-architecture-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' } });
     bundle = await import(pathToFileURL(resolve('artifacts/validation/model-architecture-test.mjs')).href);
   }
   return bundle;
@@ -39,7 +39,7 @@ async function harness(props, page = false) {
   const root = createRoot(document.getElementById('root'));
   const render = async (next) => React.act(async () => root.render(React.createElement(Component, next)));
   await render(props);
-  return { dom, React, render, scrolls: () => scrolls, reduceSystem: async (value) => React.act(async () => { media.matches = value; for (const listener of motionListeners) listener(); }), click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
+  return { dom, React, render, leave: async () => React.act(async () => root.render(null)), scrolls: () => scrolls, reduceSystem: async (value) => React.act(async () => { media.matches = value; for (const listener of motionListeners) listener(); }), click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
 }
 const telemetry = (architecture) => ({ architecture });
 
@@ -259,4 +259,134 @@ test('architecture polling uses only conditional metadata requests with a five-s
     await h.React.act(async () => t.mock.timers.tick(10000));
     assert.equal(requests.length, 2, 'hidden architecture page stops polling');
   } finally { if (h) await h.close(); t.mock.timers.reset(); globalThis.fetch = originalFetch; }
+});
+
+test('unmount and return restore module, layer, tensor, tab, step and actual outer document scroll while paused', async () => {
+  const architecture = fixture();
+  const h = await harness({ architecture, reduceMotion: true });
+  try {
+    await h.click('[aria-label="进入第 32 层"]');
+    await h.click('.ma-layer-attention');
+    await h.click('[aria-label="查看 blk.31.ffn_down.weight"]');
+    await h.click('[role="tab"]:nth-child(2)');
+    await h.click('[aria-label="下一步"]');
+    await h.click('[aria-label="下一步"]');
+    const scrolls = h.scrolls();
+    document.documentElement.scrollTop = 720;
+    document.documentElement.scrollLeft = 9;
+    document.dispatchEvent(new window.Event('scroll'));
+    await h.leave(); // Cleanup flushes a pending scroll frame before the page DOM disappears.
+    assert.equal(document.querySelector('.ma-explorer'), null);
+    document.documentElement.scrollTop = 0;
+    document.documentElement.scrollLeft = 0;
+    await h.render({ architecture });
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'attention');
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 32 层/);
+    assert.equal(document.querySelector('[role="tab"][aria-selected="true"]').textContent, '张量列表');
+    assert.match(document.querySelector('.ma-step-track [aria-current="step"]').textContent, /KV 缓存/);
+    assert.equal(document.documentElement.scrollTop, 720);
+    assert.equal(document.documentElement.scrollLeft, 9);
+    assert.equal(h.scrolls(), scrolls, 'restoration does not navigate, focus or scroll to the heading');
+    assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'paused');
+    assert.equal(document.querySelector('.ma-playback button').textContent, '播放动画');
+    await h.click('[role="tab"]');
+    assert.match(document.querySelector('.ma-weight-info').textContent, /blk\.31\.ffn_down\.weight/);
+    await h.click('.ma-playback button');
+    assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'playing');
+  } finally { await h.close(); }
+});
+
+test('navigation isolates models and invalidates changed layers or tensor descriptors', async () => {
+  const architecture = fixture();
+  const h = await harness({ architecture, reduceMotion: true });
+  try {
+    await h.click('[aria-label="进入第 32 层"]');
+    await h.click('.ma-layer-ffn');
+    await h.click('[aria-label="下一步"]');
+    const other = { ...fixture(), model: 'second-model' };
+    await h.render({ architecture: other, reduceMotion: true });
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
+    await h.click('.ma-embedding-node');
+    await h.render({ architecture, reduceMotion: true });
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'ffn');
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 32 层/);
+    await h.render({ architecture: other, reduceMotion: true });
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'embedding');
+    await h.render({ architecture: { ...architecture, block_count: 16 }, reduceMotion: true });
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
+    await h.click('[aria-label="进入第 2 层"]');
+    await h.render({ architecture: { ...architecture, block_count: 16, block_tensors: architecture.block_tensors.map((tensor) => ({ ...tensor, shape: [8, 8] })) }, reduceMotion: true });
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview', 'same tensor count with new shapes invalidates navigation');
+  } finally { await h.close(); }
+});
+
+test('storage schema rejects malformed navigation, is bounded and tolerates disabled storage', async () => {
+  const { architectureNavigationKey, architectureSignature, readArchitectureNavigation, writeArchitectureNavigation, defaultArchitectureNavigation } = await load();
+  const architecture = fixture();
+  const signature = architectureSignature(architecture);
+  const h = await harness({ architecture, reduceMotion: true });
+  try {
+    await h.leave();
+    const valid = { model: architecture.model, signature, ...defaultArchitectureNavigation() };
+    for (const corrupt of ['{', '{}', JSON.stringify([ { ...valid, view: { level: 'attention', layer: 999 } } ]), JSON.stringify([ { ...valid, step: 900 } ]), JSON.stringify([ { ...valid, tensor: { tab: 'unexpected', selectedName: null } } ]), JSON.stringify([ { ...valid, tensor: { tab: 'matrix', selectedName: 'missing.weight' } } ]), JSON.stringify([ { ...valid, scrollTop: -1 } ])]) {
+      window.sessionStorage.setItem(architectureNavigationKey, corrupt);
+      assert.equal(readArchitectureNavigation(architecture, signature), null);
+      await h.render({ architecture, reduceMotion: true });
+      assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
+      await h.leave();
+    }
+    for (let index = 0; index < 12; index++) writeArchitectureNavigation(`model-${index}`, signature, defaultArchitectureNavigation());
+    assert.equal(JSON.parse(window.sessionStorage.getItem(architectureNavigationKey)).length, 8);
+    Object.defineProperty(window, 'sessionStorage', { configurable: true, get() { throw new Error('storage disabled'); } });
+    assert.equal(readArchitectureNavigation(architecture, signature), null);
+    await h.render({ architecture, reduceMotion: true });
+    await h.click('[aria-label="进入第 2 层"]');
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
+  } finally { await h.close(); }
+});
+
+test('restoration uses a scrolling ancestor when the document is not the page scroller', async () => {
+  const architecture = fixture();
+  const h = await harness({ architecture, reduceMotion: true });
+  try {
+    await h.leave();
+    const outer = document.getElementById('root');
+    outer.style.overflowY = 'auto';
+    await h.render({ architecture, reduceMotion: true });
+    await h.click('[aria-label="进入第 2 层"]');
+    outer.scrollTop = 411;
+    document.documentElement.scrollTop = 37;
+    await h.leave();
+    outer.scrollTop = 0;
+    await h.render({ architecture, reduceMotion: true });
+    assert.equal(outer.scrollTop, 411);
+    assert.equal(document.documentElement.scrollTop, 37);
+  } finally { await h.close(); }
+});
+
+test('whole architecture page waits for metadata before restoring a removed detail page', async () => {
+  const originalFetch = globalThis.fetch;
+  const architecture = fixture();
+  globalThis.fetch = async () => Response.json(telemetry(architecture));
+  const h = await harness({ interval: 100, reduceMotion: true }, true);
+  try {
+    assert.equal(document.querySelector('.model-architecture-page h1'), null, 'the workspace already supplies the global page heading');
+    await h.click('[aria-label="进入第 32 层"]');
+    await h.click('.ma-layer-ffn');
+    await h.click('[role="tab"]:nth-child(2)');
+    document.documentElement.scrollTop = 888;
+    await h.leave();
+    document.documentElement.scrollTop = 0;
+    let resolveMetadata;
+    globalThis.fetch = async () => new Promise((resolve) => { resolveMetadata = resolve; });
+    await h.render({ interval: 100 });
+    assert.equal(document.querySelector('.ma-explorer'), null);
+    assert.match(document.querySelector('.ui-empty-state').textContent, /正在读取模型结构/);
+    await h.React.act(async () => resolveMetadata(Response.json(telemetry(architecture))));
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'ffn');
+    assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'paused');
+    assert.equal(document.querySelector('[role="tab"][aria-selected="true"]').textContent, '张量列表');
+    assert.equal(document.documentElement.scrollTop, 888);
+    assert.match(document.querySelector('.ma-model-identity').textContent, /Fixture Hunyuan Dense/);
+  } finally { await h.close(); globalThis.fetch = originalFetch; }
 });
