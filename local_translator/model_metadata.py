@@ -5,6 +5,8 @@ Format: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
 from pathlib import Path
 import re
@@ -178,15 +180,34 @@ class ArchitectureMetadataCache:
         self._lock = threading.Lock()
         self._key = None
         self._value = None
+        self._response: bytes | None = None
+        self._etag: str | None = None
 
-    def snapshot(self, path: Path, model: str) -> dict[str, Any]:
+    def _refresh(self, path: Path, model: str) -> None:
         try:
             stat = path.stat()
             key = (str(path), model, stat.st_size, stat.st_mtime_ns)
         except OSError:
             key = (str(path), model, None, None)
+        if key != self._key:
+            self._value = read_architecture(path, model)
+            self._key = key
+            self._response = None
+            self._etag = None
+
+    def snapshot(self, path: Path, model: str) -> dict[str, Any]:
         with self._lock:
-            if key != self._key:
-                self._value = read_architecture(path, model)
-                self._key = key
+            self._refresh(path, model)
             return copy.deepcopy(self._value)
+
+    def response(self, path: Path, model: str, if_none_match: str | None = None) -> tuple[str, bytes | None]:
+        """Return cached JSON bytes, or None for a matching conditional GET."""
+        with self._lock:
+            self._refresh(path, model)
+            if self._response is None:
+                self._response = json.dumps({"architecture": self._value}, ensure_ascii=False).encode("utf-8")
+                self._etag = '"' + hashlib.sha256(self._response).hexdigest() + '"'
+            # GET uses weak ETag comparison; browsers may send a validator list.
+            validators = [value.strip().removeprefix("W/") for value in (if_none_match or "").split(",")]
+            unchanged = "*" in validators or self._etag in validators
+            return self._etag, None if unchanged else self._response

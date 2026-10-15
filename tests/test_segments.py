@@ -103,15 +103,15 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(manager.client.calls, 1)
         self.assertEqual(manager.client.closed, 1)
 
-    def test_busy_request_rejected_and_lock_released_on_close(self):
+    def test_queued_request_runs_after_active_stream_closes(self):
         engine = TranslationEngine(Settings(), Manager())
         body = {"text": "hello", "target_language": "Chinese"}
         first = engine.translate_stream(body)
         next(first)
-        with self.assertRaisesRegex(TranslationRequestError, "translation_busy"):
-            list(engine.translate_stream(body))
+        queued = engine.translate_stream(body)
+        self.assertEqual(next(queued)["type"], "waiting")
         first.close()
-        self.assertEqual(list(engine.translate_stream(body))[-1]["type"], "complete")
+        self.assertEqual(list(queued)[-1]["type"], "complete")
 
     def test_resume_uses_authoritative_prefix_and_skips_finished_work(self):
         manager = Manager()

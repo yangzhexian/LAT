@@ -313,6 +313,14 @@ class LlamaCppProcessManager:
             "999",
             "-c",
             str(self.settings.num_ctx),
+            "--parallel", "1",
+            "--batch-size", str(self.settings.batch_size),
+            "--ubatch-size", str(self.settings.ubatch_size),
+            "--flash-attn", self.settings.flash_attention,
+            "--cache-type-k", self.settings.kv_cache_type,
+            "--cache-type-v", self.settings.kv_cache_type,
+            "--perf",
+            "--cache-prompt" if self.settings.cache_prompt else "--no-cache-prompt",
         ]
         try:
             process = subprocess.Popen(
@@ -412,6 +420,12 @@ class LlamaCppProcessManager:
             "lifecycle": lifecycle if process_running or lifecycle != "ready" else "failed",
             "lifecycle_error": lifecycle_error,
             "runtime_instance_id": self.runtime_instance_id,
+            "inference_config": {
+                "parallel": 1, "context_size": self.settings.num_ctx,
+                "batch_size": self.settings.batch_size, "ubatch_size": self.settings.ubatch_size,
+                "flash_attention": self.settings.flash_attention, "kv_cache_type": self.settings.kv_cache_type,
+                "cache_prompt": self.settings.cache_prompt,
+            },
             "ready": ready,
             "owned_process": process_running,
             "model_configured": selected.id,

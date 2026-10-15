@@ -32,20 +32,23 @@ class FakeManager:
 
 
 class StreamingTests(unittest.TestCase):
-    def test_busy_request_does_not_cancel_or_replace_active_job(self):
+    def test_queued_request_does_not_cancel_or_replace_active_job(self):
         engine = TranslationEngine(Settings(), FakeManager())
         active = engine.translate_stream({"text": "你好", "target_language": "English"})
         plan = next(active)
         job = engine._active_job
+        queued = engine.translate_stream({"text": "另一条原文", "target_language": "English"})
         try:
-            with self.assertRaises(TranslationRequestError) as raised:
-                list(engine.translate_stream({"text": "另一条原文", "require_ready": True}))
-            self.assertEqual(raised.exception.code, "translation_busy")
+            waiting = next(queued)
+            self.assertEqual(waiting["type"], "waiting")
+            self.assertEqual(waiting["queue_position"], 1)
             self.assertIs(engine._active_job, job)
             self.assertFalse(job.cancel.is_set())
-            self.assertEqual(list(engine._jobs), [plan["job_id"]])
+            self.assertIn(plan["job_id"], engine._jobs)
+            queued.close()
             self.assertEqual(list(active)[-1]["translation"], "Hello world.")
         finally:
+            queued.close()
             active.close()
 
     def test_cancel_id_is_isolated_from_active_job(self):

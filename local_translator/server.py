@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.parse
 import logging
 import threading
@@ -82,7 +83,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         if origin and self._origin_allowed(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, If-None-Match")
+        self.send_header("Access-Control-Expose-Headers", "ETag")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
     def _origin_allowed(self, origin: str) -> bool:
@@ -101,6 +103,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json(401, {"error": {"message": "网关会话密钥无效或未配置", "code": "unauthorized"}})
             return False
         self.request_owner = owner
+        self.request_is_admin = self.app.identity.authorize(self.headers.get("Authorization", ""), admin=True) is not None
         if self.app.stopping.is_set():
             self._json(503, {"error": {"message": "网关正在退出", "code": "gateway_stopping"}})
             return False
@@ -153,6 +156,45 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"status": "ok", "service": "lat-local-translator", "version": __version__,
                                  "protocol_version": PROTOCOL_VERSION, "instance_id": self.app.identity.instance_id})
                 return
+            route = urllib.parse.urlparse(self.path)
+            if route.path == "/admin/telemetry/gpu":
+                query = urllib.parse.parse_qs(route.query, keep_blank_values=True)
+                since = None
+                if "since" in query:
+                    try:
+                        if len(query["since"]) != 1:
+                            raise ValueError()
+                        since = float(query["since"][0])
+                        if not math.isfinite(since) or since < 0:
+                            raise ValueError()
+                    except ValueError as error:
+                        raise TranslationRequestError("采样游标必须是非负有限时间戳") from error
+                if len(query.get("session_id", [])) > 1:
+                    raise TranslationRequestError("监测会话标识不可重复")
+                session = query.get("session_id", [None])[0]
+                matches = session == self.app.telemetry.session_id
+                sample = self.app.telemetry.snapshot(since if matches else None)
+                if not matches and (since is not None or session is not None):
+                    sample["reset"] = True
+                self._json(200, sample)
+                return
+            if route.path == "/admin/telemetry/inference":
+                self._json(200, self.app.engine.inference.snapshot())
+                return
+            if route.path == "/admin/architecture":
+                etag, data = self.app.architecture.response(
+                    self.app.settings.resolved_model_path, self.app.settings.model_name,
+                    self.headers.get("If-None-Match"))
+                self.send_response(304 if data is None else 200)
+                self._headers()
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "private, no-cache")
+                if data is not None:
+                    self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                if data is not None:
+                    self.wfile.write(data)
+                return
             if self.path == "/admin/telemetry":
                 inference = self.app.engine.inference.snapshot()
                 inference["architecture"] = self.app.architecture.snapshot(
@@ -176,6 +218,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"object": "list", "data": [{"id": status["resolved_model"], "object": "model", "owned_by": "local-llama.cpp"}]})
                 return
             self._json(404, {"error": {"message": "not found", "type": "not_found"}})
+        except TranslationRequestError as error:
+            self._json(400, {"error": {"message": str(error), "type": "invalid_request_error", "code": error.code}})
         except Exception as error:
             self._json(503, {"error": {"message": str(error), "type": "service_unavailable"}})
 
@@ -243,6 +287,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             body["_owner"] = self.request_owner
             body.pop("_cancel", None)
+            body.pop("_request_source", None)
+            requested_source = body.pop("request_source", "workspace")
+            if self.request_is_admin:
+                if requested_source not in ("selection", "workspace"):
+                    raise TranslationRequestError("request_source 必须为 selection 或 workspace")
+                body["_request_source"] = requested_source
+            else:
+                body["_request_source"] = "api"
             if self.path == "/translate/stream":
                 self._stream_translation(body)
                 return
@@ -257,7 +309,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
         except TranslationRequestError as error:
-            self._json(400, {"error": {"message": str(error), "type": "invalid_request_error", "code": error.code}})
+            timeout = error.code == "translation_queue_timeout"
+            self._json(429 if timeout else 400, {"error": {"message": str(error), "type": "rate_limit_error" if timeout else "invalid_request_error", "code": error.code}})
         except TranslationOutputError as error:
             self._json(502, {"error": {"message": str(error), "type": "model_output_error", "code": error.code}})
         except ModelBusyError as error:
