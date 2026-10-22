@@ -38,8 +38,15 @@ async function harness(props, page = false) {
   const Component = page ? ModelArchitecturePage : ArchitectureExplorer;
   const root = createRoot(document.getElementById('root'));
   const render = async (next) => React.act(async () => root.render(React.createElement(Component, next)));
+  const selectLayer = async (layer) => React.act(async () => {
+    const control = document.querySelector('[aria-label="选择 Transformer 层编号"]');
+    assert.ok(control, 'the actual layer selector exists');
+    if (control.tagName === 'SELECT') { control.value = String(layer); control.dispatchEvent(new window.Event('change', { bubbles: true })); }
+    else { Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(control, String(layer)); control.dispatchEvent(new window.Event('input', { bubbles: true })); }
+  });
+  const enterLayer = async (layer) => { await selectLayer(layer); await React.act(async () => document.querySelector(`[aria-label="进入第 ${layer} 层"]`).click()); };
   await render(props);
-  return { dom, React, render, leave: async () => React.act(async () => root.render(null)), scrolls: () => scrolls, reduceSystem: async (value) => React.act(async () => { media.matches = value; for (const listener of motionListeners) listener(); }), click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
+  return { dom, React, render, selectLayer, enterLayer, leave: async () => React.act(async () => root.render(null)), scrolls: () => scrolls, reduceSystem: async (value) => React.act(async () => { media.matches = value; for (const listener of motionListeners) listener(); }), click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
 }
 const telemetry = (architecture) => ({ architecture });
 
@@ -47,10 +54,10 @@ test('all actual layers drill into Attention and FFN, restore breadcrumbs, and f
   const architecture = fixture();
   const h = await harness({ architecture, reduceMotion: true });
   try {
-    assert.equal(document.querySelectorAll('.ma-layer-tile').length, 32);
-    assert.match(document.querySelector('.ma-layer-bank').textContent, /32 个真实层.*Dense Decoder/);
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    assert.match(document.querySelector('.ma-layer-stack').textContent, /Dense Decoder.*各层参数独立.*×32 层/);
     assert.equal(h.scrolls(), 0);
-    await h.click('[aria-label="进入第 32 层"]');
+    await h.enterLayer(32);
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
     assert.match(document.querySelector('.ma-breadcrumb').textContent, /模型框架.*第 32 层/);
     assert.equal(document.activeElement, document.querySelector('.ma-canvas-heading h2'));
@@ -80,7 +87,7 @@ test('all actual layers drill into Attention and FFN, restore breadcrumbs, and f
     await h.React.act(async () => document.querySelector('.ma-breadcrumb button').click());
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
     const navigated = h.scrolls();
-    assert.equal(navigated, 6);
+    assert.equal(navigated, 5);
     await h.render({ architecture: { ...architecture } });
     assert.equal(h.scrolls(), navigated);
   } finally { await h.close(); }
@@ -149,8 +156,8 @@ test('unknown fields, limited descriptor lists and different architectures never
   const architecture = { ...fixture(), architecture: 'unknown-architecture', embedding_length: null, feed_forward_length: null, vocab_size: null, head_dim: null, block_tensors: [], block_tensors_truncated: true };
   const h = await harness({ architecture, reduceMotion: true });
   try {
-    assert.doesNotMatch(document.querySelector('.ma-layer-bank').textContent, /Dense Decoder/);
-    await h.click('[aria-label="进入第 1 层"]');
+    assert.doesNotMatch(document.querySelector('.ma-layer-stack').textContent, /Dense Decoder/);
+    await h.enterLayer(1);
     assert.match(document.querySelector('.ma-layer-inout').textContent, /—/);
     assert.doesNotMatch(document.querySelector('.ma-layer-diagram').textContent, /RMSNorm/);
     assert.match(document.querySelector('.ma-tensors').textContent, /达到读取上限.*列表已截断/);
@@ -159,8 +166,9 @@ test('unknown fields, limited descriptor lists and different architectures never
     assert.match(document.querySelector('.ma-ffn-diagram').textContent, /具体激活类型未读取/);
     await h.render({ architecture: { ...architecture, model: 'different-model', block_count: 4 }, reduceMotion: true });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
-    assert.equal(document.querySelectorAll('.ma-layer-tile').length, 4);
-    await h.click('[aria-label="进入第 4 层"]');
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    assert.equal(document.querySelector('.ma-stack-count').textContent, '×4 层');
+    await h.enterLayer(4);
     await h.click('.ma-layer-attention');
     assert.match(document.querySelector('.ma-head-explanation').textContent, /无法确认均衡 GQA 分组/);
   } finally { await h.close(); }
@@ -170,9 +178,11 @@ test('large metadata bounds drawings while retaining selectors and honest range 
   const architecture = { ...fixture(), block_count: 1500, attention_heads: 256, kv_heads: 64 };
   const h = await harness({ architecture, reduceMotion: true });
   try {
-    assert.equal(document.querySelectorAll('.ma-layer-tile').length, 1024);
-    assert.match(document.querySelector('.ma-layer-bank').textContent, /1,500 个真实层.*仅绘制前 1024 层/);
-    await h.click('[aria-label="进入第 1 层"]');
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    assert.equal(document.querySelectorAll('.ma-layer-select option').length, 0);
+    assert.equal(document.querySelectorAll('.ma-stack-back').length, 2);
+    assert.match(document.querySelector('.ma-layer-stack').textContent, /×1,500 层/);
+    await h.enterLayer(1);
     assert.equal(document.querySelector('[aria-label="选择 Transformer 层编号"]').max, '1500');
     await h.React.act(async () => { const input = document.querySelector('[aria-label="选择 Transformer 层编号"]'); Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, '1500'); input.dispatchEvent(new window.Event('input', { bubbles: true })); });
     assert.match(document.querySelector('.ma-canvas-heading').textContent, /第 1500 层/);
@@ -204,7 +214,7 @@ test('architecture page reads actual metadata, switches official config links an
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
     await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
     assert.match(document.querySelector('.ma-notice').textContent, /连接中断.*保留上次元数据/);
-    assert.equal(document.querySelectorAll('.ma-layer-tile').length, 32);
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
     assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'paused');
     globalThis.fetch = async () => Response.json({ timestamp: Date.now() / 1000, gpus: [], samples: [], message: '' });
     await h.render({ interval: 99 });
@@ -265,7 +275,7 @@ test('unmount and return restore module, layer, tensor, tab, step and actual out
   const architecture = fixture();
   const h = await harness({ architecture, reduceMotion: true });
   try {
-    await h.click('[aria-label="进入第 32 层"]');
+    await h.enterLayer(32);
     await h.click('.ma-layer-attention');
     await h.click('[aria-label="查看 blk.31.ffn_down.weight"]');
     await h.click('[role="tab"]:nth-child(2)');
@@ -300,7 +310,7 @@ test('navigation isolates models and invalidates changed layers or tensor descri
   const architecture = fixture();
   const h = await harness({ architecture, reduceMotion: true });
   try {
-    await h.click('[aria-label="进入第 32 层"]');
+    await h.enterLayer(32);
     await h.click('.ma-layer-ffn');
     await h.click('[aria-label="下一步"]');
     const other = { ...fixture(), model: 'second-model' };
@@ -314,7 +324,7 @@ test('navigation isolates models and invalidates changed layers or tensor descri
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'embedding');
     await h.render({ architecture: { ...architecture, block_count: 16 }, reduceMotion: true });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
-    await h.click('[aria-label="进入第 2 层"]');
+    await h.enterLayer(2);
     await h.render({ architecture: { ...architecture, block_count: 16, block_tensors: architecture.block_tensors.map((tensor) => ({ ...tensor, shape: [8, 8] })) }, reduceMotion: true });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview', 'same tensor count with new shapes invalidates navigation');
   } finally { await h.close(); }
@@ -340,7 +350,7 @@ test('storage schema rejects malformed navigation, is bounded and tolerates disa
     Object.defineProperty(window, 'sessionStorage', { configurable: true, get() { throw new Error('storage disabled'); } });
     assert.equal(readArchitectureNavigation(architecture, signature), null);
     await h.render({ architecture, reduceMotion: true });
-    await h.click('[aria-label="进入第 2 层"]');
+    await h.enterLayer(2);
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
   } finally { await h.close(); }
 });
@@ -353,7 +363,7 @@ test('restoration uses a scrolling ancestor when the document is not the page sc
     const outer = document.getElementById('root');
     outer.style.overflowY = 'auto';
     await h.render({ architecture, reduceMotion: true });
-    await h.click('[aria-label="进入第 2 层"]');
+    await h.enterLayer(2);
     outer.scrollTop = 411;
     document.documentElement.scrollTop = 37;
     await h.leave();
@@ -371,7 +381,7 @@ test('whole architecture page waits for metadata before restoring a removed deta
   const h = await harness({ interval: 100, reduceMotion: true }, true);
   try {
     assert.equal(document.querySelector('.model-architecture-page h1'), null, 'the workspace already supplies the global page heading');
-    await h.click('[aria-label="进入第 32 层"]');
+    await h.enterLayer(32);
     await h.click('.ma-layer-ffn');
     await h.click('[role="tab"]:nth-child(2)');
     document.documentElement.scrollTop = 888;
@@ -389,4 +399,81 @@ test('whole architecture page waits for metadata before restoring a removed deta
     assert.equal(document.documentElement.scrollTop, 888);
     assert.match(document.querySelector('.ma-model-identity').textContent, /Fixture Hunyuan Dense/);
   } finally { await h.close(); globalThis.fetch = originalFetch; }
+});
+
+test('unknown and zero layer counts never fabricate a layer; one layer has no repeated backing pages', async () => {
+  for (const blockCount of [null, 0, -1, 1.5]) {
+    const h = await harness({ architecture: { ...fixture(), block_count: blockCount }, reduceMotion: true });
+    try {
+      assert.equal(document.querySelector('.ma-layer-diagram'), null);
+      assert.equal(document.querySelector('.ma-layer-stack'), null);
+      assert.equal(document.querySelector('.ma-layer-select'), null);
+      assert.equal(document.querySelector('.ma-stack-back'), null);
+      assert.match(document.querySelector('.ma-stack-unavailable').textContent, /层数未知.*未提供有效层数/);
+      assert.equal(document.querySelector('.ma-overview-diagram > .ma-connections > path'), null);
+      assert.doesNotMatch(document.querySelector('.ma-overview-diagram').textContent, /第 1 层|×1 层/);
+      await h.click('.ma-embedding-node');
+      assert.match(document.querySelector('.ma-embedding-vector').textContent, /后续层数未知/);
+    } finally { await h.close(); }
+  }
+  const h = await harness({ architecture: { ...fixture(), block_count: 1 }, reduceMotion: true });
+  try {
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    assert.equal(document.querySelector('.ma-stack-back'), null);
+    assert.equal(document.querySelectorAll('.ma-layer-select option').length, 1);
+    assert.match(document.querySelector('.ma-stack-heading').textContent, /单层结构.*×1 层/);
+    assert.match(document.querySelector('.ma-layer-exit').textContent, /最终归一化与输出/);
+    await h.enterLayer(1);
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
+  } finally { await h.close(); }
+});
+
+test('a huge layer count keeps bounded DOM, rejects invalid input and allows the actual final layer', async () => {
+  const h = await harness({ architecture: { ...fixture(), block_count: 1000000 }, reduceMotion: true });
+  try {
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    assert.equal(document.querySelectorAll('.ma-stack-back').length, 2);
+    assert.equal(document.querySelectorAll('.ma-layer-select option').length, 0);
+    assert.ok(document.querySelector('.ma-overview-diagram').querySelectorAll('*').length < 300);
+    await h.selectLayer(1000000);
+    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '1000000');
+    assert.match(document.querySelector('.ma-layer-exit').textContent, /最终归一化与输出/);
+    for (const invalid of [0, -1, 1000001, 2.5]) {
+      await h.selectLayer(invalid);
+      assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '1000000');
+    }
+    await h.click('.ma-layer-attention');
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 1000000 层/);
+  } finally { await h.close(); }
+});
+
+test('the selected stack layer survives module navigation, embedding/output visits and page remount', async () => {
+  const architecture = fixture();
+  const h = await harness({ architecture, reduceMotion: true });
+  try {
+    await h.selectLayer(32);
+    await h.click('.ma-layer-attention');
+    assert.match(document.querySelector('.ma-attention-cache').textContent, /第 32 层/);
+    await h.click('.ma-breadcrumb button');
+    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
+    await h.click('.ma-layer-ffn');
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 32 层/);
+    await h.click('.ma-breadcrumb button');
+    for (const module of ['.ma-embedding-node', '.ma-output-node']) {
+      await h.click(module);
+      await h.click('.ma-breadcrumb button');
+      assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
+    }
+    await h.click('[aria-label="下一步"]');
+    document.documentElement.scrollTop = 643;
+    await h.leave();
+    document.documentElement.scrollTop = 0;
+    await h.render({ architecture });
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
+    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
+    assert.equal(document.querySelector('[aria-label="选择 Transformer 层编号"]').value, '32');
+    assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'paused');
+    assert.match(document.querySelector('.ma-step-track [aria-current="step"]').textContent, /逐层处理/);
+    assert.equal(document.documentElement.scrollTop, 643);
+  } finally { await h.close(); }
 });

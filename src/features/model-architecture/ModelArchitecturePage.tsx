@@ -3,10 +3,10 @@ import { getModelArchitecture } from "../../lib/api";
 import { EmptyState, Notice } from "../../components/Controls";
 import { architectureScrollContainer, architectureSignature, defaultArchitectureNavigation, defaultTensorNavigation, readArchitectureNavigation, writeArchitectureNavigation } from "../../lib/architectureNavigation";
 import {
-  actualLayerCount, architectureSource, formatNumber, formatParameters, gqaGroup, isDense, layerCount, modelSource, teachingSteps,
+  actualLayerCount, architectureSource, formatNumber, formatParameters, gqaGroup, isDense, modelSource, teachingSteps,
   type ArchitectureView, type DetailedArchitecture,
 } from "./architectureModel";
-import { ArchitectureArrow, ArchitectureConnections, BookCircuit, ResidualSum, bookFlowEdges, layerFlowEdges, type FlowEdge } from "./ArchitectureFlow";
+import { ArchitectureArrow, ArchitectureConnections, ResidualSum, overviewFlowEdges, layerFlowEdges, type FlowEdge } from "./ArchitectureFlow";
 import { TensorWeightsPanel } from "./TensorWeightsPanel";
 import "./architecture.css";
 
@@ -33,42 +33,33 @@ function Specs({ children }: { children: ReactNode }) {
 function Spec({ name, value, title }: { name: string; value: string; title?: string }) {
   return <div title={title}><dt>{name}</dt><dd>{value}</dd></div>;
 }
-function Overview({ architecture, step, navigate, pullingLayer }: { architecture: DetailedArchitecture; step: number; navigate: (view: ArchitectureView) => void; pullingLayer: number | null }) {
-  const count = layerCount(architecture);
+function LayerSelector({ count, layer, onChange }: { count: number; layer: number; onChange: (layer: number) => void }) {
+  if (!count) return null;
+  return <label className="ma-layer-select">查看层{count > 128 ? <input type="number" min="1" max={count} value={layer} aria-label="选择 Transformer 层编号" onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value >= 1 && value <= count) onChange(value); }} /> : <select value={layer} aria-label="选择 Transformer 层编号" onChange={(event) => onChange(Number(event.target.value))}>{Array.from({ length: count }, (_, index) => <option key={index} value={index + 1}>第 {index + 1} / {count} 层</option>)}</select>}</label>;
+}
+
+function Overview({ architecture, layer, step, navigate }: { architecture: DetailedArchitecture; layer: number; step: number; navigate: (view: ArchitectureView) => void }) {
   const actual = actualLayerCount(architecture);
   const container = useRef<HTMLDivElement>(null);
-  const grid = useRef<HTMLDivElement>(null);
-  const [columns, setColumns] = useState(() => window.innerWidth <= 1100 ? 4 : 8);
-  useLayoutEffect(() => {
-    const update = () => { if (grid.current) setColumns(Number(window.getComputedStyle(grid.current).getPropertyValue("--book-columns")) || (window.innerWidth <= 1100 ? 4 : 8)); };
-    update();
-    const observer = typeof window.ResizeObserver === "function" ? new window.ResizeObserver(update) : null;
-    if (grid.current) observer?.observe(grid.current);
-    window.addEventListener("resize", update);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", update); };
-  }, []);
-  return <div ref={container} className="ma-overview-diagram ma-bookshelf" data-step={step} data-pulling={pullingLayer != null}>
-    <ArchitectureConnections containerRef={container} edges={bookFlowEdges(count, columns, step)} />
-    <button type="button" className="ma-module ma-embedding-node" data-flow-node="embedding" disabled={pullingLayer != null} data-active={step === 0} onClick={() => navigate({ level: "embedding", layer: 1 })}><Matrix name="LOOKUP" active={step === 0} /><small>01 · EMBEDDING</small><strong>Token 嵌入</strong><span>{formatNumber(architecture.embedding_length)} 维</span><em>点击放大 <ArchitectureArrow direction="external" size={11} /></em></button>
-    <span className="ma-flow-space" />
-    <section className="ma-layer-bank" data-active={step === 1}><header><div><small>02 · TRANSFORMER</small><strong>{actual ? `${formatNumber(actual)} 个真实层` : "层数未知"}</strong></div><span>{isDense(architecture) ? "Dense Decoder" : "通用结构示意"}</span></header>
-      <div ref={grid} className="ma-layer-grid" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }} aria-busy={pullingLayer != null}>{Array.from({ length: count }, (_, index) => {
-        const row = Math.floor(index / columns);
-        const reverse = row % 2 === 1;
-        return <button type="button" key={index} className="ma-layer-tile ma-book-spine" data-flow-node={`book-${index + 1}`} data-pulling={pullingLayer === index + 1} disabled={pullingLayer != null} aria-label={`进入第 ${index + 1} 层`} onClick={() => navigate({ level: "layer", layer: index + 1 })} style={{ gridRow: row + 1, gridColumn: reverse ? columns - index % columns : index % columns + 1, "--layer-delay": `${index * 45}ms` } as CSSProperties}><BookCircuit layer={index + 1} reverse={reverse} /></button>;
-      })}</div>
-      <p>{actual > count ? `仅绘制前 ${count} 层；进入后可输入任意真实层编号。` : count ? "沿层号蛇形前进 · ATTN / FFN 与 R1 / R2 残差 · 点击抽出任一层" : "GGUF 未提供有效层数，无法定位具体层"}</p>
-    </section>
-    <span className="ma-flow-space" />
-    <button type="button" className="ma-module ma-output-node" data-flow-node="output" disabled={pullingLayer != null} data-active={step >= 2} onClick={() => navigate({ level: "output", layer: Math.max(1, actual) })}><span className="ma-output-symbol" aria-hidden="true"><i /><i /><i /><i /></span><small>03 · OUTPUT</small><strong>输出 head</strong><span>词表 logits → 采样</span><em>点击放大 <ArchitectureArrow direction="external" size={11} /></em></button>
-    <div className="ma-generation-loop"><span>{actual > count ? `其余 ${formatNumber(actual - count)} 层省略后进入输出 · ` : ""}下一 token · 复用 KV cache</span></div>
+  return <div ref={container} data-flow-scope className="ma-overview-diagram ma-stacked-overview" data-step={step}>
+    <ArchitectureConnections containerRef={container} edges={overviewFlowEdges(actual, step)} />
+    <button type="button" className="ma-module ma-embedding-node" data-flow-node="embedding" data-active={step === 0} onClick={() => navigate({ level: "embedding", layer })}><Matrix name="LOOKUP" active={step === 0} /><small>01 · EMBEDDING</small><strong>Token 嵌入</strong><span>{formatNumber(architecture.embedding_length)} 维</span><em>点击放大 <ArchitectureArrow direction="external" size={11} /></em></button>
+    {actual > 0 ? <section className="ma-layer-stack" aria-label={`Transformer 层结构，共 ${actual} 层`} data-flow-node="stack" data-active={step === 1}>
+      {Array.from({ length: Math.min(2, actual - 1) }, (_, index) => <div className="ma-stack-back" key={index} aria-hidden="true" style={{ "--stack-depth": index + 1 } as CSSProperties} />)}
+      <div className="ma-stack-front"><header className="ma-stack-heading"><div><span className="ma-kicker">02 · TRANSFORMER</span><h3>第 {layer} 层的完整结构</h3><p>{isDense(architecture) ? "Dense Decoder" : "通用结构示意"} · {actual > 1 ? "结构相似，各层参数独立" : "单层结构，参数独立"}</p></div><span className="ma-stack-count">×{formatNumber(actual)} 层</span></header>
+        <LayerDiagram key={layer} architecture={architecture} layer={layer} step={-1} active={step === 1} navigate={navigate} />
+        <div className="ma-stack-footer"><span>只展开当前一层 · 模型按层号依次计算</span><button type="button" className="secondary-button" aria-label={`进入第 ${layer} 层`} onClick={() => navigate({ level: "layer", layer })}>查看第 {layer} 层步骤与参数 <ArchitectureArrow direction="external" size={12} /></button></div>
+      </div>
+    </section> : <EmptyState className="ma-stack-unavailable" title="层数未知">GGUF 未提供有效层数，无法展示或定位具体 Transformer 层。</EmptyState>}
+    <button type="button" className="ma-module ma-output-node" data-flow-node="output" data-active={step >= 2} onClick={() => navigate({ level: "output", layer })}><span className="ma-output-symbol" aria-hidden="true"><i /><i /><i /><i /></span><small>03 · OUTPUT</small><strong>输出 head</strong><span>词表 logits → 采样</span><em>点击放大 <ArchitectureArrow direction="external" size={11} /></em></button>
+    <p className="ma-generation-loop">下一 token · 重新经过嵌入与各层，复用 KV cache</p>
   </div>;
 }
 
-function LayerDiagram({ architecture, layer, step, navigate }: { architecture: DetailedArchitecture; layer: number; step: number; navigate: (view: ArchitectureView) => void }) {
+function LayerDiagram({ architecture, layer, step, active = false, navigate }: { architecture: DetailedArchitecture; layer: number; step: number; active?: boolean; navigate: (view: ArchitectureView) => void }) {
   const container = useRef<HTMLDivElement>(null);
-  return <div ref={container} className="ma-layer-diagram ma-connected-layer" data-step={step}>
-    <ArchitectureConnections containerRef={container} edges={layerFlowEdges(step)} />
+  return <div ref={container} data-flow-scope className="ma-layer-diagram ma-connected-layer" data-step={step} data-layer={layer}>
+    <ArchitectureConnections containerRef={container} edges={layerFlowEdges(step).map((edge) => ({ ...edge, active: active || edge.active }))} />
     <div className="ma-layer-inout ma-layer-input" data-flow-node="input"><small>01 · INPUT</small><span>第 {layer} 层输入</span><strong>h ∈ ℝ<sup>{formatNumber(architecture.embedding_length)}</sup></strong></div>
     <span className="ma-normalization ma-norm-first" data-flow-node="norm-1" data-active={step === 0}><small>02</small>{isDense(architecture) ? "RMSNorm" : "归一化"}</span>
     <button type="button" className="ma-module ma-layer-attention" data-flow-node="attention" data-active={step === 1} onClick={() => navigate({ level: "attention", layer })}><Matrix name="Q · K · V" active={step === 1} rows={3} cols={8} /><small>03 · SELF ATTENTION</small><strong>注意力</strong><span>{formatNumber(architecture.attention_heads)} Q / {formatNumber(architecture.kv_heads)} KV heads</span><em>进入头分组与 KV cache <ArchitectureArrow direction="external" size={11} /></em></button>
@@ -95,7 +86,7 @@ function AttentionDiagram({ architecture, layer, step }: { architecture: Detaile
     { id: "cache-to-score", from: "cache", to: "score", source: "bottom", target: "top", active: step === 3 },
     { id: "score-to-projection", from: "score", to: "projection", source: "bottom", target: "top", active: step === 4 },
   ];
-  return <div ref={container} className="ma-attention-diagram ma-connected-attention" data-step={step}>
+  return <div ref={container} data-flow-scope className="ma-attention-diagram ma-connected-attention" data-step={step}>
     <ArchitectureConnections containerRef={container} edges={edges} />
     <div className="ma-attention-input" data-flow-node="attention-input"><small>HIDDEN STATE</small><strong>{formatNumber(architecture.embedding_length)} 维隐藏表示</strong><span>三路参数投影</span></div>
     <div className="ma-qkv-branches">
@@ -123,7 +114,7 @@ function FfnDiagram({ architecture, step }: { architecture: DetailedArchitecture
     { id: "ffn-input-residual", from: "ffn-input", to: "ffn-sum", source: "bottom", target: "left", route: "vertical", kind: "residual", active: step === 3 },
     { id: "ffn-sum-to-output", from: "ffn-sum", to: "ffn-output", active: step === 3 },
   ];
-  return <div ref={container} className="ma-ffn-diagram ma-connected-ffn" data-step={step}><ArchitectureConnections containerRef={container} edges={edges} /><div className="ma-vector-chip" data-flow-node="ffn-input"><small>R2 · INPUT</small><strong>{formatNumber(architecture.embedding_length)}</strong><span>残差 1 输出</span></div><span className="ma-ffn-normalization ma-normalization" data-flow-node="ffn-norm" data-active={step === 0}>{dense ? "RMSNorm" : "归一化"}</span>
+  return <div ref={container} data-flow-scope className="ma-ffn-diagram ma-connected-ffn" data-step={step}><ArchitectureConnections containerRef={container} edges={edges} /><div className="ma-vector-chip" data-flow-node="ffn-input"><small>R2 · INPUT</small><strong>{formatNumber(architecture.embedding_length)}</strong><span>残差 1 输出</span></div><span className="ma-ffn-normalization ma-normalization" data-flow-node="ffn-norm" data-active={step === 0}>{dense ? "RMSNorm" : "归一化"}</span>
     <div className="ma-ffn-fork">{branches.map((name) => <div className="ma-ffn-matrix" data-flow-node={name} key={name} data-active={step === 0}><Matrix name={name} active={step === 0} rows={5} cols={8} /><strong>{formatNumber(architecture.embedding_length)} → {formatNumber(architecture.feed_forward_length)}</strong></div>)}</div>
     <div className="ma-activation" data-flow-node="activation" data-active={step === 1}><svg viewBox="0 0 120 70" aria-hidden="true"><path className="ma-axis" d="M12 56H110M30 62V8" /><path className="ma-activation-curve" d="M12 49C30 48 38 54 49 39S63 39 72 26S88 22 105 10" /></svg><strong>{dense ? "激活 × 门控" : "非线性处理"}</strong><span>具体激活类型未读取</span></div>
     <span className="ma-flow-space" /><div className="ma-ffn-return" data-flow-node="down" data-active={step === 2}><Matrix name={dense ? "down_proj" : "输出投影"} active={step === 2} rows={5} cols={8} /><strong>{formatNumber(architecture.feed_forward_length)} → {formatNumber(architecture.embedding_length)}</strong></div>
@@ -135,9 +126,9 @@ function FfnDiagram({ architecture, step }: { architecture: DetailedArchitecture
 function EmbeddingDiagram({ architecture, step }: { architecture: DetailedArchitecture; step: number }) {
   const [token, setToken] = useState(1);
   const container = useRef<HTMLDivElement>(null);
-  return <div ref={container} className="ma-embedding-diagram ma-connected-embedding" data-step={step}><ArchitectureConnections containerRef={container} edges={[{ id: "token-to-lookup", from: "tokens", to: "lookup", active: step === 1 }, { id: "lookup-to-vector", from: "lookup", to: "vector", active: step === 2 }]} /><div className="ma-example-tokens" data-flow-node="tokens"><small>TOKEN ID · 示例</small>{["α", "β", "γ"].map((label, index) => <button type="button" key={label} aria-pressed={token === index} onClick={() => setToken(index)} aria-label={`查看示例 token ${label}`}><strong>{label}</strong><span>ID{label}</span></button>)}</div><span className="ma-flow-space" />
+  return <div ref={container} data-flow-scope className="ma-embedding-diagram ma-connected-embedding" data-step={step}><ArchitectureConnections containerRef={container} edges={[{ id: "token-to-lookup", from: "tokens", to: "lookup", active: step === 1 }, { id: "lookup-to-vector", from: "lookup", to: "vector", active: step === 2 }]} /><div className="ma-example-tokens" data-flow-node="tokens"><small>TOKEN ID · 示例</small>{["α", "β", "γ"].map((label, index) => <button type="button" key={label} aria-pressed={token === index} onClick={() => setToken(index)} aria-label={`查看示例 token ${label}`}><strong>{label}</strong><span>ID{label}</span></button>)}</div><span className="ma-flow-space" />
     <div className="ma-embedding-table" data-flow-node="lookup" data-active={step === 1}><header><strong>Embedding lookup</strong><span>{formatNumber(architecture.vocab_size)} 词表 × {formatNumber(architecture.embedding_length)} 隐藏维度</span></header>{["…", "IDα", "IDβ", "IDγ", "…"].map((label, index) => <div className="ma-embedding-row" key={index} data-selected={index === token + 1}><span>{label}</span><Matrix name="" rows={1} cols={10} active={index === token + 1 && step >= 1} /></div>)}</div><span className="ma-flow-space" />
-    <div className="ma-vector-chip ma-embedding-vector" data-flow-node="vector" data-active={step === 2}><Matrix name="TOKEN VECTOR" rows={7} cols={1} active={step === 2} /><strong>{formatNumber(architecture.embedding_length)} 维</strong><span>进入第 1 层</span></div><p className="ma-demo-caption">ID 与行纹理是教学占位，不是当前文本的分词结果或模型权重。</p>
+    <div className="ma-vector-chip ma-embedding-vector" data-flow-node="vector" data-active={step === 2}><Matrix name="TOKEN VECTOR" rows={7} cols={1} active={step === 2} /><strong>{formatNumber(architecture.embedding_length)} 维</strong><span>{actualLayerCount(architecture) > 0 ? "进入第 1 层" : "后续层数未知"}</span></div><p className="ma-demo-caption">ID 与行纹理是教学占位，不是当前文本的分词结果或模型权重。</p>
   </div>;
 }
 
@@ -150,7 +141,7 @@ function OutputDiagram({ architecture, step }: { architecture: DetailedArchitect
     { id: "sample-to-next-token", from: "sample", to: "next-token", source: "bottom", target: "right", route: "vertical", kind: "feedback", active: step === 3 },
     { id: "next-token-to-final-state", from: "next-token", to: "final-norm", source: "left", target: "left", route: "left", offset: 12, kind: "feedback", active: step === 3 },
   ];
-  return <div ref={container} className="ma-output-diagram ma-connected-output" data-step={step}><ArchitectureConnections containerRef={container} edges={edges} /><div className="ma-vector-chip" data-flow-node="final-norm" data-active={step === 0}><small>FINAL NORM</small><strong>{formatNumber(architecture.embedding_length)}</strong><span>最终隐藏表示</span></div><span className="ma-flow-space" /><div className="ma-output-head" data-flow-node="head" data-active={step === 1}><Matrix name="LM HEAD" active={step === 1} rows={6} cols={8} /><strong>输出投影</strong><span>{formatNumber(architecture.embedding_length)} → {formatNumber(architecture.vocab_size)}</span></div><span className="ma-flow-space" /><div className="ma-logits" data-flow-node="logits" data-active={step >= 1}><header><strong>词表 logits · 示例</strong><span>示意分数，非真实概率</span></header>{[35, 58, 91, 46, 24].map((width, index) => <div key={index} data-selected={step >= 2 && index === 2}><span>候选 {String.fromCharCode(65 + index)}</span><i style={{ "--logit-width": `${width}%` } as CSSProperties} /></div>)}</div><div className="ma-sampled-token" data-flow-node="sample" data-active={step >= 2}><span>示例采样</span><strong>候选 C</strong><small>采样策略由运行配置决定</small></div><div className="ma-output-feedback" data-flow-node="next-token" data-active={step === 3}><span>新 token → Embedding → 各层 · 复用 KV cache</span></div></div>;
+  return <div ref={container} data-flow-scope className="ma-output-diagram ma-connected-output" data-step={step}><ArchitectureConnections containerRef={container} edges={edges} /><div className="ma-vector-chip" data-flow-node="final-norm" data-active={step === 0}><small>FINAL NORM</small><strong>{formatNumber(architecture.embedding_length)}</strong><span>最终隐藏表示</span></div><span className="ma-flow-space" /><div className="ma-output-head" data-flow-node="head" data-active={step === 1}><Matrix name="LM HEAD" active={step === 1} rows={6} cols={8} /><strong>输出投影</strong><span>{formatNumber(architecture.embedding_length)} → {formatNumber(architecture.vocab_size)}</span></div><span className="ma-flow-space" /><div className="ma-logits" data-flow-node="logits" data-active={step >= 1}><header><strong>词表 logits · 示例</strong><span>示意分数，非真实概率</span></header>{[35, 58, 91, 46, 24].map((width, index) => <div key={index} data-selected={step >= 2 && index === 2}><span>候选 {String.fromCharCode(65 + index)}</span><i style={{ "--logit-width": `${width}%` } as CSSProperties} /></div>)}</div><div className="ma-sampled-token" data-flow-node="sample" data-active={step >= 2}><span>示例采样</span><strong>候选 C</strong><small>采样策略由运行配置决定</small></div><div className="ma-output-feedback" data-flow-node="next-token" data-active={step === 3}><span>新 token → Embedding → 各层 · 复用 KV cache</span></div></div>;
 }
 
 export function ArchitectureExplorer({ architecture, connected = true, reduceMotion = false }: { architecture: DetailedArchitecture; connected?: boolean; reduceMotion?: boolean }) {
@@ -166,17 +157,14 @@ function ArchitectureExplorerSession({ architecture, connected, reduceMotion, si
   const [tensor, setTensor] = useState(initial.tensor);
   // Returning to a saved teaching step never restarts playback unexpectedly.
   const [playing, setPlaying] = useState(!restored);
-  const [pullingLayer, setPullingLayer] = useState<number | null>(null);
   const { reduced, visible } = useMotionPreference(reduceMotion);
   const explorerRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const navigationPending = useRef(false);
-  const extraction = useRef<{ next: ArchitectureView; focus: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
   const regionId = useId();
   const steps = teachingSteps(view.level, isDense(architecture));
   const current = Math.min(step, steps.length - 1);
-  const animating = playing && !reduced && visible && connected && architecture.available && pullingLayer == null;
-  const count = layerCount(architecture);
+  const animating = playing && !reduced && visible && connected && architecture.available;
   const actual = actualLayerCount(architecture);
   const snapshot = useRef(initial);
   useLayoutEffect(() => { snapshot.current = { ...snapshot.current, view, step: current, tensor }; }, [view, current, tensor]);
@@ -205,29 +193,9 @@ function ArchitectureExplorerSession({ architecture, connected, reduceMotion, si
     if (next.layer !== view.layer) setTensor(defaultTensorNavigation());
     setView(next); setStep(0);
   }
-  function finishExtraction() {
-    const pending = extraction.current;
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    extraction.current = null;
-    setPullingLayer(null);
-    navigationPending.current = pending.focus;
-    changeView(pending.next);
-  }
   function navigate(next: ArchitectureView, focus = true) {
-    if (extraction.current) return;
-    if (view.level === "overview" && next.level === "layer" && !reduced && visible && connected && architecture.available) {
-      const timer = setTimeout(() => { if (extraction.current?.timer === timer) finishExtraction(); }, 480);
-      extraction.current = { next, focus, timer };
-      setPullingLayer(next.layer);
-      return;
-    }
     navigationPending.current = focus; changeView(next);
   }
-  useEffect(() => {
-    if (reduced || !visible || !connected || !architecture.available) finishExtraction();
-  }, [reduced, visible, connected, architecture.available]);
-  useEffect(() => () => { if (extraction.current) clearTimeout(extraction.current.timer); extraction.current = null; }, []);
   useEffect(() => {
     if (!navigationPending.current) return;
     navigationPending.current = false;
@@ -241,18 +209,18 @@ function ArchitectureExplorerSession({ architecture, connected, reduceMotion, si
   }, [animating, steps.length, view.level, view.layer]);
   const titles = { overview: "整体计算框架", layer: `第 ${view.layer} 层`, attention: "Attention · 头与缓存", ffn: "FFN · 前馈变换", embedding: "Embedding · 查表", output: "Output · 投影与采样" };
   const isLayer = view.level === "layer" || view.level === "attention" || view.level === "ffn";
-  return <div className="ma-explorer" ref={explorerRef} data-motion={animating ? "playing" : "paused"} data-level={view.level} data-extracting={pullingLayer != null}>
-    <nav className="ma-breadcrumb" aria-label="架构层级"><button type="button" disabled={pullingLayer != null} onClick={() => navigate({ level: "overview", layer: 1 })} aria-current={view.level === "overview" ? "page" : undefined}>模型框架</button>{isLayer && <><ArchitectureArrow direction="chevron" size={12} /><button type="button" onClick={() => navigate({ level: "layer", layer: view.layer })} aria-current={view.level === "layer" ? "page" : undefined}>第 {view.layer} 层</button></>}{view.level !== "overview" && view.level !== "layer" && <><ArchitectureArrow direction="chevron" size={12} /><span aria-current="page">{titles[view.level]}</span></>}</nav>
-    <section className="ma-canvas" aria-label={titles[view.level]}><header className="ma-canvas-heading"><div><span className="ma-kicker">{view.level === "overview" ? "MODEL ATLAS" : "COMPUTATION CLOSE-UP"}</span><h2 ref={headingRef} tabIndex={-1}>{titles[view.level]}</h2></div>{isLayer && count > 0 ? <label className="ma-layer-select">跳转层{actual > count ? <input type="number" min="1" max={actual} value={view.layer} aria-label="选择 Transformer 层编号" onBlur={() => navigate(view)} onChange={(event) => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value >= 1 && value <= actual) navigate({ level: view.level, layer: value }, false); }} /> : <select value={view.layer} onChange={(event) => navigate({ level: view.level, layer: Number(event.target.value) })}>{Array.from({ length: count }, (_, index) => <option key={index} value={index + 1}>第 {index + 1} / {count} 层</option>)}</select>}</label> : <span className="ma-teaching-badge">教学演示 · 可逐步查看</span>}</header>
-      <div id={regionId} className="ma-diagram-stage" key={`${view.level}-${view.layer}`}>
-        {view.level === "overview" && <Overview architecture={architecture} step={current} navigate={navigate} pullingLayer={pullingLayer} />}
+  return <div className="ma-explorer" ref={explorerRef} data-motion={animating ? "playing" : "paused"} data-level={view.level}>
+    <nav className="ma-breadcrumb" aria-label="架构层级"><button type="button" onClick={() => navigate({ level: "overview", layer: view.layer })} aria-current={view.level === "overview" ? "page" : undefined}>模型框架</button>{isLayer && <><ArchitectureArrow direction="chevron" size={12} /><button type="button" onClick={() => navigate({ level: "layer", layer: view.layer })} aria-current={view.level === "layer" ? "page" : undefined}>第 {view.layer} 层</button></>}{view.level !== "overview" && view.level !== "layer" && <><ArchitectureArrow direction="chevron" size={12} /><span aria-current="page">{titles[view.level]}</span></>}</nav>
+    <section className="ma-canvas" aria-label={titles[view.level]}><header className="ma-canvas-heading"><div><span className="ma-kicker">{view.level === "overview" ? "MODEL ATLAS" : "COMPUTATION CLOSE-UP"}</span><h2 ref={headingRef} tabIndex={-1}>{titles[view.level]}</h2></div>{(isLayer || view.level === "overview") && actual > 0 ? <LayerSelector count={actual} layer={view.layer} onChange={(layer) => navigate({ level: view.level, layer }, false)} /> : <span className="ma-teaching-badge">教学演示 · 可逐步查看</span>}</header>
+      <div id={regionId} className="ma-diagram-stage" key={view.level === "overview" ? "overview" : `${view.level}-${view.layer}`}>
+        {view.level === "overview" && <Overview architecture={architecture} layer={view.layer} step={current} navigate={navigate} />}
         {view.level === "layer" && <LayerDiagram architecture={architecture} layer={view.layer} step={current} navigate={navigate} />}
         {view.level === "attention" && <AttentionDiagram architecture={architecture} layer={view.layer} step={current} />}
         {view.level === "ffn" && <FfnDiagram architecture={architecture} step={current} />}
         {view.level === "embedding" && <EmbeddingDiagram architecture={architecture} step={current} />}
         {view.level === "output" && <OutputDiagram architecture={architecture} step={current} />}
       </div>
-      <div className="ma-playback"><div className="ma-playback-buttons"><button type="button" aria-pressed={playing} aria-controls={regionId} onClick={() => setPlaying((previous) => !previous)} disabled={reduced || !connected || pullingLayer != null}>{playing && !reduced && connected ? "暂停动画" : "播放动画"}</button><button type="button" aria-label="上一步" onClick={() => { setPlaying(false); setStep((previous) => Math.max(0, previous - 1)); }} disabled={current === 0 || pullingLayer != null}><ArchitectureArrow direction="left" /></button><button type="button" aria-label="下一步" disabled={pullingLayer != null} onClick={() => { setPlaying(false); setStep((previous) => (previous + 1) % steps.length); }}><ArchitectureArrow /></button><span>{current + 1} / {steps.length}</span></div><span className="ma-animation-label">{pullingLayer != null ? `正在抽出第 ${pullingLayer} 层…` : reduced ? "减少动态效果 · 手动查看步骤" : !connected ? "连接中断 · 教学动画暂停" : !visible ? "页面隐藏 · 动画暂停" : "独立教学时间线 · 非实时参数活动"}</span></div>
+      <div className="ma-playback"><div className="ma-playback-buttons"><button type="button" aria-pressed={playing} aria-controls={regionId} onClick={() => setPlaying((previous) => !previous)} disabled={reduced || !connected}>{playing && !reduced && connected ? "暂停动画" : "播放动画"}</button><button type="button" aria-label="上一步" onClick={() => { setPlaying(false); setStep((previous) => Math.max(0, previous - 1)); }} disabled={current === 0}><ArchitectureArrow direction="left" /></button><button type="button" aria-label="下一步" onClick={() => { setPlaying(false); setStep((previous) => (previous + 1) % steps.length); }}><ArchitectureArrow /></button><span>{current + 1} / {steps.length}</span></div><span className="ma-animation-label">{reduced ? "减少动态效果 · 手动查看步骤" : !connected ? "连接中断 · 教学动画暂停" : !visible ? "页面隐藏 · 动画暂停" : "独立教学时间线 · 非实时参数活动"}</span></div>
       <ol className="ma-step-track" aria-label="计算步骤">{steps.map((item, index) => <li key={item.name}><button type="button" aria-current={current === index ? "step" : undefined} onClick={() => { setPlaying(false); setStep(index); }}><span>{String(index + 1).padStart(2, "0")}</span>{item.name}</button></li>)}</ol>
       <div className="ma-step-explanation" aria-live={animating ? "off" : "polite"}><strong>{steps[current].name}</strong><p>{steps[current].description}</p></div>
     </section>

@@ -30,20 +30,15 @@ async function harness(props, setup) {
   const { ArchitectureExplorer } = await load();
   const root = createRoot(document.getElementById('root'));
   const render = async (next) => React.act(async () => root.render(React.createElement(ArchitectureExplorer, next)));
+  const selectLayer = async (layer) => React.act(async () => {
+    const control = document.querySelector('[aria-label="选择 Transformer 层编号"]');
+    assert.ok(control, 'the actual layer selector exists');
+    if (control.tagName === 'SELECT') { control.value = String(layer); control.dispatchEvent(new window.Event('change', { bubbles: true })); }
+    else { Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(control, String(layer)); control.dispatchEvent(new window.Event('input', { bubbles: true })); }
+  });
+  const enterLayer = async (layer) => { await selectLayer(layer); await React.act(async () => document.querySelector(`[aria-label="进入第 ${layer} 层"]`).click()); };
   await render(props);
-  return { React, render, click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
-}
-function extractionTimers() {
-  const originalSet = globalThis.setTimeout;
-  const originalClear = globalThis.clearTimeout;
-  const timers = new Map();
-  let sequence = 0;
-  globalThis.setTimeout = (callback, delay, ...args) => {
-    if (delay >= 400 && delay <= 600) { const id = `book-${++sequence}`; timers.set(id, { callback: () => callback(...args), delay }); return id; }
-    return originalSet(callback, delay, ...args);
-  };
-  globalThis.clearTimeout = (id) => { if (timers.has(id)) timers.delete(id); else originalClear(id); };
-  return { timers, finish: () => { const entry = timers.entries().next().value; assert.ok(entry, 'a book transition is pending'); timers.delete(entry[0]); entry[1].callback(); }, restore: () => { globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear; } };
+  return { React, render, selectLayer, enterLayer, click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
 }
 function assertPortsExist() {
   for (const path of document.querySelectorAll('.ma-connections > path')) {
@@ -52,35 +47,30 @@ function assertPortsExist() {
   }
 }
 
-test('bookshelf preserves all layer connections through eight and four column snake layouts', async () => {
-  const { bookFlowEdges, connectionPath } = await load();
-  for (const columns of [8, 4]) {
-    const edges = bookFlowEdges(32, columns);
-    assert.equal(edges[0].from, 'embedding'); assert.equal(edges[0].to, 'book-1');
-    for (let layer = 1; layer < 32; layer++) {
-      const edge = edges.find((item) => item.from === `book-${layer}`);
-      assert.equal(edge.to, `book-${layer + 1}`);
-      if (layer % columns === 0) assert.equal(edge.source, edge.target, 'row turn joins the same side of consecutive rows');
-    }
-    assert.ok(edges.some((edge) => edge.from === 'book-32' && edge.to === 'output'));
-    assert.ok(edges.some((edge) => edge.from === 'output' && edge.to === 'embedding' && edge.kind === 'feedback'));
-    const turn = edges.find((edge) => edge.from === `book-${columns}`);
-    const path = connectionPath(turn, { [turn.from]: { left: 100, top: 20, width: 40, height: 100 }, [turn.to]: { left: 100, top: 150, width: 40, height: 100 }, output: { left: 1000, top: 20, width: 100, height: 100 } });
-    assert.equal(path, 'M140,70 H146 V200 H140', 'row turns stay adjacent to the books even with a distant output node');
-  }
+test('stack overview connects embedding, one complete repeated layer and output with an outside feedback route', async () => {
+  const { overviewFlowEdges, connectionPath } = await load();
+  const edges = overviewFlowEdges(32);
+  assert.deepEqual(edges.map((edge) => [edge.from, edge.to]), [['embedding', 'stack'], ['stack', 'output'], ['output', 'embedding']]);
+  assert.deepEqual(overviewFlowEdges(0), []);
+  const rectangles = { embedding: { left: 200, top: 0, width: 200, height: 100 }, stack: { left: 0, top: 150, width: 600, height: 500 }, output: { left: 200, top: 700, width: 200, height: 100 } };
+  assert.equal(connectionPath(edges[0], rectangles), 'M300,100 V125 H300 V150');
+  assert.equal(connectionPath(edges[2], rectangles), 'M400,750 H618 V50 H400', 'feedback runs outside the wide layer page rather than crossing its contents');
   const h = await harness({ architecture: fixture(), reduceMotion: true });
   try {
-    assert.equal(document.querySelectorAll('.ma-book-circuit').length, 32);
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    assert.equal(document.querySelectorAll('.ma-stack-back').length, 2);
     assertPortsExist();
-    for (const [width, columns] of [[1320, 8], [900, 4]]) {
-      window.innerWidth = width;
-      await h.React.act(async () => window.dispatchEvent(new window.Event('resize')));
-      const first = document.querySelector('[data-flow-node="book-1"]');
-      const nextRow = document.querySelector(`[data-flow-node="book-${columns + 1}"]`);
-      assert.equal(first.style.gridColumn, '1');
-      assert.equal(nextRow.style.gridColumn, String(columns));
-      assert.equal(nextRow.style.gridRow, '2');
-    }
+    const overview = document.querySelector('.ma-overview-diagram');
+    const embedding = document.querySelector('.ma-embedding-node');
+    const stack = document.querySelector('.ma-layer-stack');
+    await h.selectLayer(32);
+    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
+    assert.match(document.querySelector('.ma-layer-input').textContent, /第 32 层输入/);
+    assert.match(document.querySelector('.ma-layer-exit').textContent, /最终归一化与输出/);
+    assert.equal(document.querySelector('.ma-overview-diagram'), overview, 'only the selected detailed layer is replaced');
+    assert.equal(document.querySelector('.ma-embedding-node'), embedding);
+    assert.equal(document.querySelector('.ma-layer-stack'), stack);
+    assertPortsExist();
   } finally { await h.close(); }
 });
 
@@ -106,7 +96,7 @@ test('layer main route and both residuals join the actual sum nodes', async () =
   assert.equal(connectionPath(edges.find((edge) => edge.id === 'ffn-residual'), rectangles), 'M276,73 H294 V244 H113 V226');
   const h = await harness({ architecture: fixture(), reduceMotion: true });
   try {
-    await h.click('[aria-label="进入第 32 层"]');
+    await h.enterLayer(32);
     assertPortsExist();
     assert.equal(document.querySelector('[data-flow-node="sum-1"]').tagName.toLowerCase(), 'circle');
     assert.equal(document.querySelector('[data-flow-node="sum-2"]').tagName.toLowerCase(), 'circle');
@@ -119,7 +109,7 @@ test('connections measure attached parent refs on first mount and refresh SVG pa
   const h = await harness({ architecture: fixture(), reduceMotion: true }, (surface) => {
     surface.Element.prototype.getBoundingClientRect = function () {
       const node = this.getAttribute('data-flow-node');
-      const index = node?.startsWith('book-') ? Number(node.slice(5)) : 0;
+      const index = node === 'stack' ? 1 : 0;
       const left = !node ? 0 : node === 'embedding' ? 20 : node === 'output' ? 650 : 140 + ((index - 1) % 8) * 50;
       const top = node ? index ? 30 + Math.floor((index - 1) / 8) * 130 : 140 : 0;
       const width = node ? 40 : 800;
@@ -130,83 +120,67 @@ test('connections measure attached parent refs on first mount and refresh SVG pa
   try {
     const overlay = document.querySelector('.ma-connections');
     assert.equal(overlay.getAttribute('viewBox'), '0 0 800 600');
-    const first = overlay.querySelector('[data-connection="embedding-to-first-layer"]');
-    assert.ok(first.getAttribute('d').startsWith('M60,190'), 'mounted source port is measured rather than a null parent ref');
+    const first = overlay.querySelector('[data-connection="embedding-to-layers"]');
+    assert.ok(first.getAttribute('d').startsWith('M40,240'), 'mounted source port is measured rather than a null parent ref');
     assert.ok([...overlay.querySelectorAll(':scope > path')].every((path) => path.getAttribute('d')), 'all actual ports have a drawn path');
     scale = 1.5;
     await h.React.act(async () => { window.dispatchEvent(new window.Event('resize')); await new Promise((resolve) => window.requestAnimationFrame(resolve)); });
     assert.equal(overlay.getAttribute('viewBox'), '0 0 1200 900');
-    assert.ok(first.getAttribute('d').startsWith('M90,285'));
+    assert.ok(first.getAttribute('d').startsWith('M60,360'));
   } finally { await h.close(); }
 });
 
-test('book activation extracts the selected book before navigation and blocks overlapping requests', async () => {
+test('keyboard activation enters the selected layer immediately without extraction timers', async () => {
   const h = await harness({ architecture: fixture() });
-  const clock = extractionTimers();
+  const originalTimeout = globalThis.setTimeout;
+  let extractionTimers = 0;
+  globalThis.setTimeout = (callback, delay, ...args) => { if (delay === 480) extractionTimers++; return originalTimeout(callback, delay, ...args); };
   try {
+    await h.selectLayer(32);
     await h.React.act(async () => document.querySelector('[aria-label="进入第 32 层"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 0 })));
-    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
-    assert.equal(document.querySelector('.ma-explorer').dataset.extracting, 'true');
-    assert.equal(document.querySelector('[aria-label="进入第 32 层"]').dataset.pulling, 'true');
-    assert.equal(document.querySelectorAll('.ma-layer-tile:disabled').length, 32);
-    assert.equal(clock.timers.size, 1);
-    await h.click('[aria-label="进入第 2 层"]');
-    assert.equal(clock.timers.size, 1);
-    await h.React.act(async () => clock.finish());
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
-    assert.match(document.querySelector('.ma-canvas-heading h2').textContent, /第 32 层/);
     assert.equal(document.activeElement, document.querySelector('.ma-canvas-heading h2'));
-    assert.equal(document.querySelector('.ma-explorer').dataset.extracting, 'false');
-  } finally { await h.close(); clock.restore(); }
+    assert.match(document.querySelector('.ma-canvas-heading h2').textContent, /第 32 层/);
+    assert.equal(extractionTimers, 0);
+    assert.equal(document.querySelector('[data-extracting], [data-pulling]'), null);
+  } finally { await h.close(); globalThis.setTimeout = originalTimeout; }
 });
 
-test('reduced motion skips extraction and hidden, disconnected or newly reduced pages finish it safely', async () => {
-  const reduced = await harness({ architecture: fixture(), reduceMotion: true });
-  const reducedClock = extractionTimers();
-  try { await reduced.click('[aria-label="进入第 1 层"]'); assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer'); assert.equal(reducedClock.timers.size, 0); }
-  finally { await reduced.close(); reducedClock.restore(); }
+test('hidden, reduced and disconnected pages keep immediate navigation while pausing teaching animation', async () => {
   for (const reason of ['hidden', 'disconnected', 'reduced']) {
     const h = await harness({ architecture: fixture() });
-    const clock = extractionTimers();
     try {
-      await h.click('[aria-label="进入第 8 层"]');
+      await h.selectLayer(8);
       if (reason === 'hidden') {
         Object.defineProperty(document, 'hidden', { configurable: true, value: true });
         await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
       } else await h.render({ architecture: fixture(), connected: reason !== 'disconnected', reduceMotion: reason === 'reduced' });
-      assert.equal(clock.timers.size, 0, `${reason} clears extraction timeout`);
+      await h.click('[aria-label="进入第 8 层"]');
       assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
       assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'paused');
       assert.match(document.querySelector('.ma-canvas-heading h2').textContent, /第 8 层/);
-    } finally { await h.close(); clock.restore(); }
+    } finally { await h.close(); }
   }
 });
 
-test('model changes cancel old book selection and unmount clears pending transition callbacks', async () => {
+test('model changes invalidate the old selected layer and keep exactly one replacement structure', async () => {
   const h = await harness({ architecture: fixture() });
-  const clock = extractionTimers();
   try {
-    await h.click('[aria-label="进入第 32 层"]');
-    const late = [...clock.timers.values()][0].callback;
+    await h.selectLayer(32);
     await h.render({ architecture: { ...fixture(), model: 'other-model', block_count: 4 } });
-    assert.equal(clock.timers.size, 0);
-    await h.React.act(async () => late());
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
-    assert.equal(document.querySelectorAll('.ma-layer-tile').length, 4);
-    await h.click('[aria-label="进入第 4 层"]');
-    assert.equal(clock.timers.size, 1);
-    await h.React.act(async () => late());
-    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview', 'an old callback cannot finish a new extraction');
-    assert.equal(clock.timers.size, 1);
-    await h.close();
-    assert.equal(clock.timers.size, 0);
-  } finally { clock.restore(); }
+    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '1');
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    await h.enterLayer(4);
+    assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
+    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '4');
+  } finally { await h.close(); }
 });
 
 test('close-up graphs connect the attention fork, normalized FFN input, residual merge and output feedback', async () => {
   const h = await harness({ architecture: fixture(), reduceMotion: true });
   try {
-    await h.click('[aria-label="进入第 1 层"]');
+    await h.enterLayer(1);
     await h.click('.ma-layer-attention');
     assertPortsExist();
     assert.deepEqual([...document.querySelectorAll('[data-from="attention-input"]')].map((path) => path.dataset.to), ['query', 'key', 'value']);
@@ -232,6 +206,7 @@ test('close-up graphs connect the attention fork, normalized FFN input, residual
 
 test('geometry coalesces resize, observer and fonts per frame; highlights never measure and cleanup cancels late work', async () => {
   let measurements = 0;
+  const perNodeReads = new Map();
   let nextFrame = 0;
   let fontReady;
   const frames = new Map();
@@ -242,8 +217,8 @@ test('geometry coalesces resize, observer and fonts per frame; highlights never 
     surface.requestAnimationFrame = (callback) => { const id = ++nextFrame; frames.set(id, callback); return id; };
     surface.cancelAnimationFrame = (id) => frames.delete(id);
     surface.ResizeObserver = class {
-      constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this); }
-      observe() {}
+      constructor(callback) { this.callback = callback; this.disconnected = false; this.nodes = []; observers.push(this); }
+      observe(node) { this.nodes.push(node); }
       disconnect() { this.disconnected = true; }
     };
     fonts = new surface.EventTarget();
@@ -254,22 +229,28 @@ test('geometry coalesces resize, observer and fonts per frame; highlights never 
     Object.defineProperty(surface.document, 'fonts', { value: fonts });
     surface.Element.prototype.getBoundingClientRect = function () {
       measurements++;
+      perNodeReads.set(this, (perNodeReads.get(this) ?? 0) + 1);
       const node = this.getAttribute('data-flow-node');
-      const index = node?.startsWith('book-') ? Number(node.slice(5)) : node === 'output' ? 34 : 0;
+      const index = node === 'output' ? this.closest('.ma-layer-diagram') ? 2 : 34 : 0;
       return { left: index * 50, top: 30, width: node ? 40 : 1800, height: node ? 100 : 600 };
     };
   });
   const flush = async () => h.React.act(async () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)); });
   try {
     const initial = measurements;
-    assert.equal(initial, 35, 'container plus 34 flow nodes measured once on mount');
+    assert.equal(initial, 13, 'outer container + 3 endpoints and inner container + 8 endpoints, without duplicate reads');
     assert.equal(frames.size, 0, 'no redundant unconditional mount frame');
+    assert.ok([...perNodeReads.values()].every((reads) => reads === 1), 'nested ports are not measured again by the outer graph');
+    const outer = document.querySelector('.ma-overview-diagram');
+    const outerObserver = observers.find((observer) => observer.nodes.includes(outer));
+    assert.deepEqual(outerObserver.nodes.map((node) => node.dataset.flowNode ?? 'container'), ['container', 'embedding', 'stack', 'output']);
+    assert.match(outer.querySelector(':scope > .ma-connections [data-connection="next-token-feedback"]').getAttribute('d'), /^M1740,50/, 'outer output endpoint is not overwritten by the nested output');
     const originalPaths = [...document.querySelectorAll('.ma-connections > path')].map((path) => path.getAttribute('d'));
     await h.click('[aria-label="下一步"]');
     await h.render({ architecture: { ...fixture() }, reduceMotion: true });
     assert.equal(measurements, initial, 'step highlight and unchanged metadata never read rectangles');
     assert.deepEqual([...document.querySelectorAll('.ma-connections > path')].map((path) => path.getAttribute('d')), originalPaths);
-    assert.equal(document.querySelector('[data-connection="layer-1-to-2"]').dataset.active, 'true');
+    assert.equal(document.querySelector('[data-connection="input-to-norm"]').dataset.active, 'true');
     await h.React.act(async () => {
       window.dispatchEvent(new window.Event('resize'));
       window.dispatchEvent(new window.Event('resize'));
@@ -279,17 +260,17 @@ test('geometry coalesces resize, observer and fonts per frame; highlights never 
       await Promise.resolve();
     });
     assert.equal(measurements, initial);
-    assert.equal(frames.size, 1, 'all notifications share one scheduled geometry refresh');
+    assert.equal(frames.size, 2, 'all notifications share one scheduled refresh per diagram');
     await flush();
     assert.equal(measurements, initial * 2);
     assert.equal(frames.size, 0);
     window.dispatchEvent(new window.Event('resize'));
-    assert.equal(frames.size, 1);
+    assert.equal(frames.size, 2);
     const staleCallback = [...frames.values()][0];
     await h.close();
     assert.equal(frames.size, 0, 'unmount cancels pending frame');
     assert.ok(observers.every((observer) => observer.disconnected));
-    assert.equal(fontsRemoved, 1);
+    assert.equal(fontsRemoved, 2);
     staleCallback();
     observers.forEach((observer) => observer.callback());
     fontReady();
@@ -313,7 +294,7 @@ test('route and anchor changes invalidate geometry without losing arrow or resid
   const root = createRoot(document.getElementById('root'));
   function Fixture({ route, active }) {
     const ref = React.useRef(null);
-    return React.createElement('div', { ref }, React.createElement(ArchitectureConnections, { containerRef: ref, edges: [{ id: 'residual', from: 'a', to: 'b', source: 'top', target: 'top', route, active, kind: 'residual' }] }), React.createElement('div', { 'data-flow-node': 'a' }), React.createElement('div', { 'data-flow-node': 'b' }));
+    return React.createElement('div', { ref }, React.createElement(ArchitectureConnections, { containerRef: ref, edges: [{ id: 'residual', from: 'a', to: 'b', source: 'top', target: 'top', route, active, kind: 'residual' }] }), React.createElement('div', { 'data-flow-node': 'a' }), React.createElement('div', { 'data-flow-node': 'b' }), React.createElement('div', { 'data-flow-node': 'unused' }), React.createElement('div', { 'data-flow-scope': true }, React.createElement('div', { 'data-flow-node': 'a' })));
   }
   try {
     await React.act(async () => root.render(React.createElement(Fixture, { route: 'above' })));
@@ -328,4 +309,32 @@ test('route and anchor changes invalidate geometry without losing arrow or resid
     assert.equal(path.dataset.kind, 'residual');
     assert.match(path.getAttribute('marker-end'), /^url\(#/);
   } finally { await React.act(async () => root.unmount()); dom.window.close(); }
+});
+
+test('changing the selected stack layer releases only the old inner observer and preserves live outer endpoints', async () => {
+  const observers = [];
+  const h = await harness({ architecture: fixture(), reduceMotion: true }, (surface) => {
+    surface.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; this.nodes = []; this.disconnected = false; observers.push(this); }
+      observe(node) { this.nodes.push(node); }
+      disconnect() { this.disconnected = true; }
+    };
+  });
+  try {
+    const outer = document.querySelector('.ma-overview-diagram');
+    const oldInner = document.querySelector('.ma-layer-diagram');
+    const outerObserver = observers.find((observer) => observer.nodes.includes(outer));
+    const innerObserver = observers.find((observer) => observer.nodes.includes(oldInner));
+    await h.selectLayer(32);
+    assert.equal(innerObserver.disconnected, true);
+    assert.equal(oldInner.isConnected, false);
+    assert.equal(outerObserver.disconnected, false);
+    assert.ok(outerObserver.nodes.every((node) => node.isConnected), 'cached outer nodes survive the inner layer replacement');
+    const newInner = document.querySelector('.ma-layer-diagram');
+    assert.notEqual(newInner, oldInner);
+    assert.ok(observers.some((observer) => !observer.disconnected && observer.nodes.includes(newInner)));
+    await h.render({ architecture: { ...fixture(), model: 'replacement-model' }, reduceMotion: true });
+    assert.equal(outerObserver.disconnected, true);
+    assert.equal(outer.isConnected, false);
+  } finally { await h.close(); assert.ok(observers.every((observer) => observer.disconnected)); }
 });
