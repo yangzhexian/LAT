@@ -1,12 +1,12 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
-import { formatNumber, formatParameters, type BlockTensor, type DetailedArchitecture } from "./architectureModel";
+import { actualLayerCount, formatNumber, formatParameters, type BlockTensor, type DetailedArchitecture } from "./architectureModel";
 import { matrixLayout, tensorRole, tensorShare, tensorSummary } from "./tensorPresentation";
 import { EmptyState, Notice } from "../../components/Controls";
 import { defaultTensorNavigation, type TensorNavigation } from "../../lib/architectureNavigation";
 import "./weights.css";
 
 function TensorSymbol({ vector = false }: { vector?: boolean }) {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+  return <svg width="24" height="24" style={{ width: 24, height: 24, flexShrink: 0 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="4" y={vector ? "9" : "4"} width="16" height={vector ? "6" : "16"} rx="2" />
     <path d={vector ? "M9 9v6m6-6v6" : "M4 9h16M4 15h16M9 4v16M15 4v16"} />
   </svg>;
@@ -25,11 +25,11 @@ function TensorMatrix({ tensor }: { tensor: BlockTensor }) {
       </div>
     </div>
     {tensor.shape.length > 2 && <div className="ma-weight-extra-axes">{tensor.shape.slice(2).map((size, index) => <span key={index}>存储轴 {index + 3}：{formatNumber(size)}</span>)}</div>}
-    <figcaption>{tensor.shape.length > 2 ? "存储轴 1/2 的平面示意 · " : "结构分块示意 · "}比例已压缩 · 每格不对应一个参数</figcaption>
+    <figcaption>{tensor.shape.length > 2 ? "存储轴 1/2 的平面示意，" : "结构分块示意，"}比例已压缩，每格不对应一个参数</figcaption>
   </figure>;
 }
 
-export function TensorWeightsPanel({ architecture, layer, navigation, onNavigationChange }: { architecture: DetailedArchitecture; layer: number; navigation?: TensorNavigation; onNavigationChange?: (next: TensorNavigation) => void }) {
+export function TensorWeightsPanel({ architecture, layer, navigation, onNavigationChange, onLayerChange }: { architecture: DetailedArchitecture; layer: number; navigation?: TensorNavigation; onNavigationChange?: (next: TensorNavigation) => void; onLayerChange?: (layer: number) => void }) {
   const [localNavigation, setLocalNavigation] = useState(defaultTensorNavigation);
   const { tab: view, selectedName } = navigation ?? localNavigation;
   const update = (next: TensorNavigation) => { if (onNavigationChange) onNavigationChange(next); else setLocalNavigation(next); };
@@ -50,11 +50,12 @@ export function TensorWeightsPanel({ architecture, layer, navigation, onNavigati
     setView(next === 0 ? "matrix" : "list"); tabRefs.current[next]?.focus();
   }
   return <section className="ma-tensors ma-weights" aria-label={`第 ${layer} 层参数`}>
-    <header className="ma-weights-heading"><div><span className="ma-kicker">PARAMETER BLUEPRINT</span><h3>第 {layer} 层 · 参数结构</h3></div>
+    {onLayerChange && actualLayerCount(architecture) > 0 && <div className="ma-parameter-selector"><div><strong>独立参数检查器</strong><p>各层结构共用，存储参数独立。切换编号只检查该层参数。</p></div><label className="ma-layer-select">参数层<input type="number" min="1" max={actualLayerCount(architecture)} value={layer} aria-label="选择参数层编号" onChange={(event) => { const next = Number(event.target.value); if (Number.isSafeInteger(next) && next >= 1 && next <= actualLayerCount(architecture)) onLayerChange(next); }} /><span>共 {formatNumber(actualLayerCount(architecture))} 层</span></label></div>}
+    <header className="ma-weights-heading"><div><span className="ma-kicker">PARAMETER BLUEPRINT</span><h3>第 {layer} 层，参数结构</h3></div>
       {tensors.length > 0 && <div className="ma-weight-view-tabs" role="tablist" aria-label="参数展示方式">{(["matrix", "list"] as const).map((value, index) => <button type="button" key={value} ref={(element) => { tabRefs.current[index] = element; }} role="tab" id={`${panelId}-${value}-tab`} aria-controls={`${panelId}-${value}-panel`} aria-selected={view === value} tabIndex={view === value ? 0 : -1} onClick={() => setView(value)} onKeyDown={(event) => tabKey(event, index)}>{value === "matrix" ? "矩阵视图" : "张量列表"}</button>)}</div>}
     </header>
     {tensors.length ? <>
-      <div className="ma-weight-summary"><span><strong>{tensors.length}</strong> 个存储张量</span><span><strong>{formatParameters(summary.elements)}</strong> 已读取元素{partial ? " · 部分描述" : ""}</span><span>GGUF 形状 · 未读取权重数值</span></div>
+      <div className="ma-weight-summary"><span><strong>{tensors.length}</strong> 个存储张量</span><span><strong>{formatParameters(summary.elements)}</strong> 已读取元素{partial ? "，部分描述" : ""}</span><span>GGUF 形状，未读取权重数值</span></div>
       <div role="tabpanel" id={`${panelId}-matrix-panel`} aria-labelledby={`${panelId}-matrix-tab`} hidden={view !== "matrix"}>
         {view === "matrix" && selected && <>
           <div className="ma-weight-cards" role="group" aria-label="选择参数张量">{tensors.map((tensor) => {
@@ -65,7 +66,7 @@ export function TensorWeightsPanel({ architecture, layer, navigation, onNavigati
           })}</div>
           <div id={`${panelId}-detail`} className="ma-weight-detail">
             <TensorMatrix tensor={selected} />
-            <div className="ma-weight-info"><span className="ma-weight-role">{tensorRole(selected.name).group} · {selected.shape.length === 1 ? "参数向量" : `${selected.shape.length} 维张量`}</span><h4>{tensorRole(selected.name).label}</h4><code>{selected.name}</code><p>{tensorRole(selected.name).description}</p>
+            <div className="ma-weight-info"><span className="ma-weight-role">{tensorRole(selected.name).group}，{selected.shape.length === 1 ? "参数向量" : `${selected.shape.length} 维张量`}</span><h4>{tensorRole(selected.name).label}</h4><code>{selected.name}</code><p>{tensorRole(selected.name).description}</p>
               <dl><div><dt>GGUF 存储维度</dt><dd>{selected.shape.map(formatNumber).join(" × ") || "—"}</dd></div><div><dt>存储元素数量</dt><dd>{formatNumber(selected.elements)}</dd></div></dl>
               <div className="ma-weight-share"><div><span>占本层已读取元素</span><strong>{share === null ? "—" : `${share < .1 ? share.toPrecision(2) : share.toFixed(1)}%`}</strong></div><div className="ma-weight-share-track" aria-hidden="true"><i style={{ width: `${share ?? 0}%` }} /></div></div>
             </div>

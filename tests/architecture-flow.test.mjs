@@ -31,14 +31,15 @@ async function harness(props, setup) {
   const root = createRoot(document.getElementById('root'));
   const render = async (next) => React.act(async () => root.render(React.createElement(ArchitectureExplorer, next)));
   const selectLayer = async (layer) => React.act(async () => {
-    const control = document.querySelector('[aria-label="选择 Transformer 层编号"]');
+    const control = document.querySelector('[aria-label="选择参数层编号"]');
     assert.ok(control, 'the actual layer selector exists');
     if (control.tagName === 'SELECT') { control.value = String(layer); control.dispatchEvent(new window.Event('change', { bubbles: true })); }
     else { Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(control, String(layer)); control.dispatchEvent(new window.Event('input', { bubbles: true })); }
   });
-  const enterLayer = async (layer) => { await selectLayer(layer); await React.act(async () => document.querySelector(`[aria-label="进入第 ${layer} 层"]`).click()); };
+  const enterLayer = async (layer) => { await selectLayer(layer); await React.act(async () => document.querySelector('[aria-label="查看层结构"]').click()); };
+  const explainNext = async () => React.act(async () => { const buttons = [...document.querySelectorAll('.ma-step-track button')]; const index = buttons.findIndex((button) => button.getAttribute('aria-pressed') === 'true'); buttons[(index + 1) % buttons.length].click(); });
   await render(props);
-  return { React, render, selectLayer, enterLayer, click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
+  return { React, render, selectLayer, enterLayer, explainNext, click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
 }
 function assertPortsExist() {
   for (const path of document.querySelectorAll('.ma-connections > path')) {
@@ -64,9 +65,9 @@ test('stack overview connects embedding, one complete repeated layer and output 
     const embedding = document.querySelector('.ma-embedding-node');
     const stack = document.querySelector('.ma-layer-stack');
     await h.selectLayer(32);
-    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
-    assert.match(document.querySelector('.ma-layer-input').textContent, /第 32 层输入/);
-    assert.match(document.querySelector('.ma-layer-exit').textContent, /最终归一化与输出/);
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '32');
+    assert.match(document.querySelector('.ma-layer-input').textContent, /隐藏表示输入/);
+    assert.match(document.querySelector('.ma-layer-exit').textContent, /传入后续层或最终输出/);
     assert.equal(document.querySelector('.ma-overview-diagram'), overview, 'only the selected detailed layer is replaced');
     assert.equal(document.querySelector('.ma-embedding-node'), embedding);
     assert.equal(document.querySelector('.ma-layer-stack'), stack);
@@ -137,10 +138,10 @@ test('keyboard activation enters the selected layer immediately without extracti
   globalThis.setTimeout = (callback, delay, ...args) => { if (delay === 480) extractionTimers++; return originalTimeout(callback, delay, ...args); };
   try {
     await h.selectLayer(32);
-    await h.React.act(async () => document.querySelector('[aria-label="进入第 32 层"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 0 })));
+    await h.React.act(async () => document.querySelector('[aria-label="查看层结构"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 0 })));
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
     assert.equal(document.activeElement, document.querySelector('.ma-canvas-heading h2'));
-    assert.match(document.querySelector('.ma-canvas-heading h2').textContent, /第 32 层/);
+    assert.match(document.querySelector('.ma-canvas-heading h2').textContent, /共享层结构/);
     assert.equal(extractionTimers, 0);
     assert.equal(document.querySelector('[data-extracting], [data-pulling]'), null);
   } finally { await h.close(); globalThis.setTimeout = originalTimeout; }
@@ -155,10 +156,10 @@ test('hidden, reduced and disconnected pages keep immediate navigation while pau
         Object.defineProperty(document, 'hidden', { configurable: true, value: true });
         await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
       } else await h.render({ architecture: fixture(), connected: reason !== 'disconnected', reduceMotion: reason === 'reduced' });
-      await h.click('[aria-label="进入第 8 层"]');
+      await h.click('[aria-label="查看层结构"]');
       assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
       assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'paused');
-      assert.match(document.querySelector('.ma-canvas-heading h2').textContent, /第 8 层/);
+      assert.match(document.querySelector('.ma-canvas-heading h2').textContent, /共享层结构/);
     } finally { await h.close(); }
   }
 });
@@ -169,11 +170,11 @@ test('model changes invalidate the old selected layer and keep exactly one repla
     await h.selectLayer(32);
     await h.render({ architecture: { ...fixture(), model: 'other-model', block_count: 4 } });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
-    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '1');
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '1');
     assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
     await h.enterLayer(4);
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
-    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '4');
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '4');
   } finally { await h.close(); }
 });
 
@@ -199,8 +200,8 @@ test('close-up graphs connect the attention fork, normalized FFN input, residual
     assertPortsExist();
     assert.ok(document.querySelector('[data-from="sample"][data-to="next-token"][data-kind="feedback"]'));
     assert.ok(document.querySelector('[data-from="next-token"][data-to="final-norm"][data-kind="feedback"]'));
-    assert.ok(document.querySelector('[aria-label="下一步"] svg'));
-    assert.doesNotMatch(document.querySelector('.ma-playback-buttons').textContent, /[←→]/);
+    assert.equal(document.querySelector('[aria-label="下一步"]'), null);
+    assert.doesNotMatch(document.querySelector('.ma-playback').textContent, /[←→]/);
   } finally { await h.close(); }
 });
 
@@ -246,7 +247,7 @@ test('geometry coalesces resize, observer and fonts per frame; highlights never 
     assert.deepEqual(outerObserver.nodes.map((node) => node.dataset.flowNode ?? 'container'), ['container', 'embedding', 'stack', 'output']);
     assert.match(outer.querySelector(':scope > .ma-connections [data-connection="next-token-feedback"]').getAttribute('d'), /^M1740,50/, 'outer output endpoint is not overwritten by the nested output');
     const originalPaths = [...document.querySelectorAll('.ma-connections > path')].map((path) => path.getAttribute('d'));
-    await h.click('[aria-label="下一步"]');
+    await h.explainNext();
     await h.render({ architecture: { ...fixture() }, reduceMotion: true });
     assert.equal(measurements, initial, 'step highlight and unchanged metadata never read rectangles');
     assert.deepEqual([...document.querySelectorAll('.ma-connections > path')].map((path) => path.getAttribute('d')), originalPaths);
@@ -311,7 +312,7 @@ test('route and anchor changes invalidate geometry without losing arrow or resid
   } finally { await React.act(async () => root.unmount()); dom.window.close(); }
 });
 
-test('changing the selected stack layer releases only the old inner observer and preserves live outer endpoints', async () => {
+test('changing the parameter layer preserves both shared diagram scopes and model changes clean up observers', async () => {
   const observers = [];
   const h = await harness({ architecture: fixture(), reduceMotion: true }, (surface) => {
     surface.ResizeObserver = class {
@@ -326,12 +327,12 @@ test('changing the selected stack layer releases only the old inner observer and
     const outerObserver = observers.find((observer) => observer.nodes.includes(outer));
     const innerObserver = observers.find((observer) => observer.nodes.includes(oldInner));
     await h.selectLayer(32);
-    assert.equal(innerObserver.disconnected, true);
-    assert.equal(oldInner.isConnected, false);
+    assert.equal(innerObserver.disconnected, false);
+    assert.equal(oldInner.isConnected, true);
     assert.equal(outerObserver.disconnected, false);
     assert.ok(outerObserver.nodes.every((node) => node.isConnected), 'cached outer nodes survive the inner layer replacement');
     const newInner = document.querySelector('.ma-layer-diagram');
-    assert.notEqual(newInner, oldInner);
+    assert.equal(newInner, oldInner, 'parameter selection does not remount shared architecture');
     assert.ok(observers.some((observer) => !observer.disconnected && observer.nodes.includes(newInner)));
     await h.render({ architecture: { ...fixture(), model: 'replacement-model' }, reduceMotion: true });
     assert.equal(outerObserver.disconnected, true);

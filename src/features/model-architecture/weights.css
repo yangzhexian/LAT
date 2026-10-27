@@ -1,3 +1,10 @@
+.ma-tensors { margin-top: 24px; min-width: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+.ma-weights-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
+.ma-tensors table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ma-tensors th, .ma-tensors td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.ma-tensors th { font-weight: 500; color: var(--muted); }
+.ma-tensors th:first-child { width: 48%; }
+.ma-tensors > small { display: block; margin-top: 16px; color: var(--muted); font-size: 11px; line-height: 1.8; }
 .ma-weights.ma-tensors { padding: 23px 25px; }
 .ma-weights .ma-weights-heading { margin-bottom: 17px; }
 .ma-weights .ma-weights-heading h3 { font-size: 16px; font-weight: 550; margin-top: 7px; }

@@ -35,6 +35,14 @@ test('offline MathJax renders membership, norm and boldsymbol without errors', {
     assert.match(node.outerHTML, /mjx-c2208/);
     assert.match(node.outerHTML, /mjx-c2016|mjx-c2225/);
     assert.match(node.outerHTML, /TEX-BI/);
+    const architectureSource = await readFile('src/features/model-architecture/ModelArchitecturePage.tsx', 'utf8');
+    const architectureFormulas = [...architectureSource.matchAll(/String\.raw`([^`]+)`/g)].map((match) => match[1]);
+    architectureFormulas.push(String.raw`h \in \mathbb{R}^{4096}`);
+    assert.ok(architectureFormulas.length >= 6, 'architecture equations cover attention, FFN, embedding, output and hidden dimensions');
+    for (const formula of architectureFormulas) {
+      const rendered = await dom.window.MathJax.tex2chtmlPromise(formula, { display: false });
+      assert.equal(rendered.querySelectorAll('mjx-merror').length, 0, `architecture formula renders locally: ${formula}`);
+    }
     assert.ok(requests.some((path) => path.endsWith('/boldsymbol.js')));
     assert.deepEqual(errors, []);
   } finally { dom.window.close(); }

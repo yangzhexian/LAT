@@ -19,7 +19,7 @@ export function tensorRole(name: string) {
   const index = roles.findIndex((role) => role.key === key);
   const role = roles[index];
   return {
-    label: (role?.label ?? key) + (name.endsWith(".bias") ? " · 偏置" : ""),
+    label: (role?.label ?? key) + (name.endsWith(".bias") ? "（偏置）" : ""),
     group: role?.group ?? "其他",
     description: role?.description ?? "该张量的专属计算用途尚未确认，按 GGUF 描述展示存储结构。",
     order: index === -1 ? roles.length : index,

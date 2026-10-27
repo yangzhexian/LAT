@@ -20,7 +20,7 @@ async function bundleWorkspace(outfile, mockHistory = false) {
         }
         builder.onResolve({ filter: /^better-react-mathjax$/ }, () => ({ path: 'mathjax', namespace: 'mathjax-fixture' }));
         builder.onLoad({ filter: /.*/, namespace: 'mathjax-fixture' }, () => ({
-          loader: 'tsx', resolveDir: resolve('.'), contents: `export function MathJax({ children }) {
+          loader: 'tsx', resolveDir: resolve('.'), contents: `import { createContext } from "react"; export const MathJaxBaseContext = createContext(undefined); export function MathJax({ children }) {
             globalThis.workspaceMathRenders?.push(children);
             return <div data-math-preview>{children}</div>;
           }`,

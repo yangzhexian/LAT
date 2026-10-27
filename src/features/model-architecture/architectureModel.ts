@@ -39,7 +39,7 @@ export function teachingSteps(level: ArchitectureLevel, dense: boolean): Teachin
   switch (level) {
     case "overview": return [
       { name: "嵌入输入", description: "Token ID 通过嵌入矩阵查表，成为隐藏向量。图中流光是教学节奏，不是当前推理计时。" },
-      { name: "逐层处理", description: dense ? "密集 Decoder 的生成 token 沿全部 Transformer 层前进。各层结构相似，但具有各自的参数。堆叠页只展示所选一层；可切换层号或进入步骤与参数。" : "层数来自本地 GGUF。切换层号查看通用 Transformer 计算路径；模型专属算子尚未确认。" },
+      { name: "逐层处理", description: dense ? "密集 Decoder 的生成 token 沿全部 Transformer 层前进。各层结构相似，但具有各自的参数。画布只展示一份共享结构；独立参数可在参数检查器中按层查看。" : "层数来自本地 GGUF。共享画布展示通用 Transformer 计算路径；模型专属算子尚未确认。" },
       { name: "输出投影", description: "最终表示经过归一化与输出 head，得到词表候选的分数 logits。" },
       { name: "采样与回流", description: "采样决定后续 token，再进入下一轮生成。图中候选及连线均为计算过程示例。" },
     ];

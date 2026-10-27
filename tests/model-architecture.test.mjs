@@ -39,14 +39,15 @@ async function harness(props, page = false) {
   const root = createRoot(document.getElementById('root'));
   const render = async (next) => React.act(async () => root.render(React.createElement(Component, next)));
   const selectLayer = async (layer) => React.act(async () => {
-    const control = document.querySelector('[aria-label="选择 Transformer 层编号"]');
+    const control = document.querySelector('[aria-label="选择参数层编号"]');
     assert.ok(control, 'the actual layer selector exists');
     if (control.tagName === 'SELECT') { control.value = String(layer); control.dispatchEvent(new window.Event('change', { bubbles: true })); }
     else { Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(control, String(layer)); control.dispatchEvent(new window.Event('input', { bubbles: true })); }
   });
-  const enterLayer = async (layer) => { await selectLayer(layer); await React.act(async () => document.querySelector(`[aria-label="进入第 ${layer} 层"]`).click()); };
+  const enterLayer = async (layer) => { await selectLayer(layer); await React.act(async () => document.querySelector('[aria-label="查看层结构"]').click()); };
+  const explainNext = async () => React.act(async () => { const buttons = [...document.querySelectorAll('.ma-step-track button')]; const index = buttons.findIndex((button) => button.getAttribute('aria-pressed') === 'true'); buttons[(index + 1) % buttons.length].click(); });
   await render(props);
-  return { dom, React, render, selectLayer, enterLayer, leave: async () => React.act(async () => root.render(null)), scrolls: () => scrolls, reduceSystem: async (value) => React.act(async () => { media.matches = value; for (const listener of motionListeners) listener(); }), click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
+  return { dom, React, render, selectLayer, enterLayer, explainNext, leave: async () => React.act(async () => root.render(null)), scrolls: () => scrolls, reduceSystem: async (value) => React.act(async () => { media.matches = value; for (const listener of motionListeners) listener(); }), click: async (selector) => React.act(async () => document.querySelector(selector).click()), close: async () => { await React.act(async () => root.unmount()); dom.window.close(); } };
 }
 const telemetry = (architecture) => ({ architecture });
 
@@ -59,7 +60,7 @@ test('all actual layers drill into Attention and FFN, restore breadcrumbs, and f
     assert.equal(h.scrolls(), 0);
     await h.enterLayer(32);
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
-    assert.match(document.querySelector('.ma-breadcrumb').textContent, /模型框架.*第 32 层/);
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /模型框架.*共享层结构/);
     assert.equal(document.activeElement, document.querySelector('.ma-canvas-heading h2'));
     assert.equal(h.scrolls(), 1);
     await h.React.act(async () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === '张量列表').click());
@@ -69,20 +70,20 @@ test('all actual layers drill into Attention and FFN, restore breadcrumbs, and f
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'attention');
     assert.equal(document.querySelectorAll('.ma-head-grid button').length, 32);
     await h.click('[aria-label="Query head 32"]');
-    assert.match(document.querySelector('.ma-head-explanation').textContent, /Query head 32 → KV group 8.*每组 4.*头维度：128/);
+    assert.match(document.querySelector('.ma-head-explanation').textContent, /Query head 32，KV group 8.*每组 4.*头维度：128/);
     assert.equal(document.querySelector('.ma-key [data-selected="true"]').textContent, 'K8');
     assert.equal(document.querySelector('.ma-value [data-selected="true"]').textContent, 'V8');
     assert.equal(document.querySelectorAll('.ma-head-grid [data-group="true"]').length, 4);
-    await h.React.act(async () => { const select = document.querySelector('.ma-layer-select select'); select.value = '2'; select.dispatchEvent(new window.Event('change', { bubbles: true })); });
-    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 2 层/);
+    await h.selectLayer(2);
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /共享层结构/);
     await h.React.act(async () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === '张量列表').click());
     assert.match(document.querySelector('.ma-tensors').textContent, /blk\.1\.attn_q\.weight/);
     await h.React.act(async () => document.querySelectorAll('.ma-breadcrumb button')[1].click());
     await h.click('.ma-layer-ffn');
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'ffn');
     assert.match(document.querySelector('.ma-ffn-diagram').textContent, /gate_proj.*up_proj.*down_proj/);
-    assert.match(document.querySelector('.ma-ffn-diagram').textContent, /4,096 → 14,336/);
-    await h.click('[aria-label="下一步"]');
+    assert.match(document.querySelector('.ma-ffn-diagram').textContent, /输入 4,096 维，输出 14,336 维/);
+    await h.explainNext();
     assert.match(document.querySelector('.ma-step-explanation').textContent, /激活与门控.*未读取具体激活函数类型/);
     await h.React.act(async () => document.querySelector('.ma-breadcrumb button').click());
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
@@ -101,15 +102,15 @@ test('embedding lookup and output sampling use explicit examples with actual mod
     await h.click('[aria-label="查看示例 token γ"]');
     assert.match(document.querySelector('.ma-embedding-row[data-selected="true"]').textContent, /IDγ/);
     assert.match(document.querySelector('.ma-demo-caption').textContent, /不是当前文本的分词结果或模型权重/);
-    await h.click('[aria-label="下一步"]');
-    await h.click('[aria-label="下一步"]');
+    await h.explainNext();
+    await h.explainNext();
     assert.equal(document.querySelector('.ma-embedding-vector').dataset.active, 'true');
     await h.React.act(async () => document.querySelector('.ma-breadcrumb button').click());
     await h.click('.ma-output-node');
-    assert.match(document.querySelector('.ma-output-head').textContent, /4,096 → 128,167/);
+    assert.match(document.querySelector('.ma-output-head').textContent, /隐藏 4,096 维，词表 128,167 项/);
     assert.match(document.querySelector('.ma-logits').textContent, /示意分数，非真实概率/);
-    await h.click('[aria-label="下一步"]');
-    await h.click('[aria-label="下一步"]');
+    await h.explainNext();
+    await h.explainNext();
     assert.equal(document.querySelector('.ma-sampled-token').dataset.active, 'true');
     assert.match(document.querySelector('.ma-step-explanation').textContent, /运行配置决定采样策略/);
     assert.doesNotMatch(document.body.textContent, /实时逐参数计算中|当前 token 概率|SiLU|GELU/);
@@ -121,21 +122,20 @@ test('teaching animation is independent of inference and stops for pause, reduce
   const motion = () => document.querySelector('.ma-explorer').dataset.motion;
   try {
     assert.equal(motion(), 'playing');
-    assert.match(document.querySelector('.ma-animation-label').textContent, /独立教学时间线 · 非实时参数活动/);
+    assert.match(document.querySelector('.ma-animation-label').textContent, /并行循环的结构示意.*不表示实时推理进度/);
     await h.click('.ma-playback button');
     assert.equal(motion(), 'paused');
-    await h.click('[aria-label="下一步"]');
-    assert.match(document.querySelector('.ma-step-track [aria-current="step"]').textContent, /逐层处理/);
+    await h.explainNext();
+    assert.match(document.querySelector('.ma-step-track [aria-pressed="true"]').textContent, /逐层处理/);
     await h.click('.ma-playback button');
     assert.equal(motion(), 'playing');
     await h.render({ architecture: fixture(), reduceMotion: true });
     assert.equal(motion(), 'paused');
     assert.equal(document.querySelector('.ma-playback button').disabled, true);
-    assert.match(document.querySelector('.ma-animation-label').textContent, /手动查看步骤/);
-    await h.click('[aria-label="下一步"]');
-    assert.match(document.querySelector('.ma-step-track [aria-current="step"]').textContent, /输出投影/);
+    assert.match(document.querySelector('.ma-animation-label').textContent, /选择模块查看说明/);
+    await h.explainNext();
+    assert.match(document.querySelector('.ma-step-track [aria-pressed="true"]').textContent, /输出投影/);
     await h.render({ architecture: fixture() });
-    await h.click('.ma-playback button');
     await h.reduceSystem(true);
     assert.equal(motion(), 'paused');
     await h.reduceSystem(false);
@@ -183,15 +183,15 @@ test('large metadata bounds drawings while retaining selectors and honest range 
     assert.equal(document.querySelectorAll('.ma-stack-back').length, 2);
     assert.match(document.querySelector('.ma-layer-stack').textContent, /×1,500 层/);
     await h.enterLayer(1);
-    assert.equal(document.querySelector('[aria-label="选择 Transformer 层编号"]').max, '1500');
-    await h.React.act(async () => { const input = document.querySelector('[aria-label="选择 Transformer 层编号"]'); Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, '1500'); input.dispatchEvent(new window.Event('input', { bubbles: true })); });
-    assert.match(document.querySelector('.ma-canvas-heading').textContent, /第 1500 层/);
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').max, '1500');
+    await h.React.act(async () => { const input = document.querySelector('[aria-label="选择参数层编号"]'); Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, '1500'); input.dispatchEvent(new window.Event('input', { bubbles: true })); });
+    assert.match(document.querySelector('.ma-canvas-heading').textContent, /共享层结构/);
     await h.click('.ma-layer-attention');
     assert.equal(document.querySelectorAll('.ma-head-grid button').length, 128);
     assert.match(document.querySelector('.ma-head-selector').textContent, /最多绘制前 128/);
     assert.equal(document.querySelector('[aria-label="选择 Query head 编号"]').max, '256');
     await h.React.act(async () => { const input = document.querySelector('[aria-label="选择 Query head 编号"]'); Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, '256'); input.dispatchEvent(new window.Event('input', { bubbles: true })); });
-    assert.match(document.querySelector('.ma-head-explanation').textContent, /Query head 256 → KV group 64/);
+    assert.match(document.querySelector('.ma-head-explanation').textContent, /Query head 256，KV group 64/);
     const { gqaGroup } = await load();
     assert.deepEqual(gqaGroup(architecture, 256), { group: 64, queriesPerGroup: 4 });
     assert.equal(gqaGroup(architecture, 257), null);
@@ -279,8 +279,8 @@ test('unmount and return restore module, layer, tensor, tab, step and actual out
     await h.click('.ma-layer-attention');
     await h.click('[aria-label="查看 blk.31.ffn_down.weight"]');
     await h.click('[role="tab"]:nth-child(2)');
-    await h.click('[aria-label="下一步"]');
-    await h.click('[aria-label="下一步"]');
+    await h.explainNext();
+    await h.explainNext();
     const scrolls = h.scrolls();
     document.documentElement.scrollTop = 720;
     document.documentElement.scrollLeft = 9;
@@ -291,9 +291,9 @@ test('unmount and return restore module, layer, tensor, tab, step and actual out
     document.documentElement.scrollLeft = 0;
     await h.render({ architecture });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'attention');
-    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 32 层/);
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /共享层结构/);
     assert.equal(document.querySelector('[role="tab"][aria-selected="true"]').textContent, '张量列表');
-    assert.match(document.querySelector('.ma-step-track [aria-current="step"]').textContent, /KV 缓存/);
+    assert.match(document.querySelector('.ma-step-track [aria-pressed="true"]').textContent, /KV 缓存/);
     assert.equal(document.documentElement.scrollTop, 720);
     assert.equal(document.documentElement.scrollLeft, 9);
     assert.equal(h.scrolls(), scrolls, 'restoration does not navigate, focus or scroll to the heading');
@@ -312,14 +312,14 @@ test('navigation isolates models and invalidates changed layers or tensor descri
   try {
     await h.enterLayer(32);
     await h.click('.ma-layer-ffn');
-    await h.click('[aria-label="下一步"]');
+    await h.explainNext();
     const other = { ...fixture(), model: 'second-model' };
     await h.render({ architecture: other, reduceMotion: true });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
     await h.click('.ma-embedding-node');
     await h.render({ architecture, reduceMotion: true });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'ffn');
-    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 32 层/);
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /共享层结构/);
     await h.render({ architecture: other, reduceMotion: true });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'embedding');
     await h.render({ architecture: { ...architecture, block_count: 16 }, reduceMotion: true });
@@ -420,9 +420,9 @@ test('unknown and zero layer counts never fabricate a layer; one layer has no re
   try {
     assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
     assert.equal(document.querySelector('.ma-stack-back'), null);
-    assert.equal(document.querySelectorAll('.ma-layer-select option').length, 1);
+    assert.equal(document.querySelectorAll('.ma-layer-select option').length, 0);
     assert.match(document.querySelector('.ma-stack-heading').textContent, /单层结构.*×1 层/);
-    assert.match(document.querySelector('.ma-layer-exit').textContent, /最终归一化与输出/);
+    assert.match(document.querySelector('.ma-layer-exit').textContent, /传入后续层或最终输出/);
     await h.enterLayer(1);
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'layer');
   } finally { await h.close(); }
@@ -436,14 +436,14 @@ test('a huge layer count keeps bounded DOM, rejects invalid input and allows the
     assert.equal(document.querySelectorAll('.ma-layer-select option').length, 0);
     assert.ok(document.querySelector('.ma-overview-diagram').querySelectorAll('*').length < 300);
     await h.selectLayer(1000000);
-    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '1000000');
-    assert.match(document.querySelector('.ma-layer-exit').textContent, /最终归一化与输出/);
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '1000000');
+    assert.match(document.querySelector('.ma-layer-exit').textContent, /传入后续层或最终输出/);
     for (const invalid of [0, -1, 1000001, 2.5]) {
       await h.selectLayer(invalid);
-      assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '1000000');
+      assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '1000000');
     }
     await h.click('.ma-layer-attention');
-    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 1000000 层/);
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /共享层结构/);
   } finally { await h.close(); }
 });
 
@@ -453,27 +453,54 @@ test('the selected stack layer survives module navigation, embedding/output visi
   try {
     await h.selectLayer(32);
     await h.click('.ma-layer-attention');
-    assert.match(document.querySelector('.ma-attention-cache').textContent, /第 32 层/);
+    assert.match(document.querySelector('.ma-attention-cache').textContent, /每层独立的上下文缓存/);
     await h.click('.ma-breadcrumb button');
-    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '32');
     await h.click('.ma-layer-ffn');
-    assert.match(document.querySelector('.ma-breadcrumb').textContent, /第 32 层/);
+    assert.match(document.querySelector('.ma-breadcrumb').textContent, /共享层结构/);
     await h.click('.ma-breadcrumb button');
     for (const module of ['.ma-embedding-node', '.ma-output-node']) {
       await h.click(module);
       await h.click('.ma-breadcrumb button');
-      assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
+      assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '32');
     }
-    await h.click('[aria-label="下一步"]');
+    await h.explainNext();
     document.documentElement.scrollTop = 643;
     await h.leave();
     document.documentElement.scrollTop = 0;
     await h.render({ architecture });
     assert.equal(document.querySelector('.ma-explorer').dataset.level, 'overview');
-    assert.equal(document.querySelector('.ma-layer-diagram').dataset.layer, '32');
-    assert.equal(document.querySelector('[aria-label="选择 Transformer 层编号"]').value, '32');
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '32');
+    assert.equal(document.querySelector('[aria-label="选择参数层编号"]').value, '32');
     assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'paused');
-    assert.match(document.querySelector('.ma-step-track [aria-current="step"]').textContent, /逐层处理/);
+    assert.match(document.querySelector('.ma-step-track [aria-pressed="true"]').textContent, /逐层处理/);
     assert.equal(document.documentElement.scrollTop, 643);
   } finally { await h.close(); }
+});
+
+test('parallel architecture motion never advances explanations, remounts the canvas or duplicates layers', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const h = await harness({ architecture: fixture() });
+  try {
+    const canvas = document.querySelector('.ma-diagram-stage');
+    const layer = document.querySelector('.ma-layer-diagram');
+    const selected = document.querySelector('.ma-step-track [aria-pressed="true"]');
+    assert.equal(document.querySelector('.ma-canvas input, .ma-canvas select'), null, 'architecture has no per-layer selector');
+    assert.equal(document.querySelectorAll('.ma-parameter-selector input').length, 1);
+    assert.equal(document.querySelectorAll('.ma-layer-select option').length, 0);
+    assert.ok(document.querySelectorAll('[data-flow-particle]').length >= 12, 'all main and residual routes have independent flow overlays');
+    await h.React.act(async () => t.mock.timers.tick(240000));
+    assert.equal(document.querySelector('.ma-diagram-stage'), canvas);
+    assert.equal(document.querySelector('.ma-step-track [aria-pressed="true"]'), selected, 'elapsed animation time never changes the explanation');
+    await h.explainNext();
+    assert.equal(document.querySelector('.ma-explorer').dataset.motion, 'playing', 'manual explanations do not control parallel animations');
+    await h.selectLayer(32);
+    assert.equal(document.querySelector('.ma-layer-diagram'), layer, 'parameter selection does not replace the shared layer');
+    assert.equal(document.querySelectorAll('.ma-layer-diagram').length, 1);
+    assert.match(document.querySelector('.ma-tensors').textContent, /第 32 层/);
+    for (const svg of document.querySelectorAll('svg:not(.ma-connections)')) {
+      assert.ok(svg.style.width && svg.style.height, 'decorative icon sizes are explicitly locked');
+    }
+    assert.doesNotMatch(document.querySelector('.ma-canvas').textContent, / · | → /);
+  } finally { await h.close(); t.mock.timers.reset(); }
 });

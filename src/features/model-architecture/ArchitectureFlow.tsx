@@ -1,12 +1,13 @@
-import { useEffect, useId, useMemo, useState, type RefObject } from "react";
+import { useEffect, useId, useMemo, useState, type CSSProperties, type RefObject } from "react";
+import { architectureTypesetEvent } from "./ArchitectureFormula";
 
 export function ArchitectureArrow({ direction = "right", size = 14, className = "" }: { direction?: "right" | "left" | "external" | "chevron"; size?: number; className?: string }) {
   const paths = { right: "M4 12h15m-5-5 5 5-5 5", left: "M20 12H5m5-5-5 5 5 5", external: "M7 17 17 7M7 7h10v10", chevron: "m9 6 6 6-6 6" };
-  return <svg className={`ma-arrow-icon ${className}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[direction]} /></svg>;
+  return <svg className={`ma-arrow-icon ${className}`} width={size} height={size} style={{ width: size, height: size, minWidth: size, maxWidth: size, flexShrink: 0 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[direction]} /></svg>;
 }
 
 export function ResidualSum({ label = "残差相加", flowNode }: { label?: string; flowNode?: string }) {
-  return <span className="ma-sum-symbol"><svg viewBox="0 0 36 36" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle data-flow-node={flowNode} cx="18" cy="18" r="13" /><path d="M12 18h12M18 12v12" /></svg><small>{label}</small></span>;
+  return <span className="ma-sum-symbol"><svg width="36" height="36" style={{ width: 36, height: 36, flexShrink: 0 }} viewBox="0 0 36 36" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle data-flow-node={flowNode} cx="18" cy="18" r="13" /><path d="M12 18h12M18 12v12" /></svg><small>{label}</small></span>;
 }
 
 export type FlowAnchor = "left" | "right" | "top" | "bottom";
@@ -98,7 +99,7 @@ export function layerFlowEdges(step = 0): FlowEdge[] {
 export function ArchitectureConnections({ containerRef, edges }: { containerRef: RefObject<HTMLDivElement | null>; edges: FlowEdge[] }) {
   const marker = useId().replace(/:/g, "");
   const [layout, setLayout] = useState<{ width: number; height: number; rectangles: Record<string, FlowRect> }>({ width: 1, height: 1, rectangles: {} });
-  // Active steps change every animation tick; they never invalidate geometry.
+  // Manual explanation highlights never invalidate geometry; CSS flow animation does not render React frames.
   const signature = JSON.stringify(edges.map(({ active: _active, ...geometry }) => geometry));
   const geometry = useMemo(() => JSON.parse(signature) as FlowEdge[], [signature]);
   useEffect(() => {
@@ -134,9 +135,10 @@ export function ArchitectureConnections({ containerRef, edges }: { containerRef:
     observer?.observe(container);
     nodes.forEach((node) => observer?.observe(node));
     window.addEventListener("resize", schedule);
+    container.addEventListener(architectureTypesetEvent, schedule);
     document.fonts?.addEventListener("loadingdone", schedule);
     if (document.fonts?.status === "loading") void document.fonts.ready.then(schedule);
-    return () => { stopped = true; observer?.disconnect(); window.removeEventListener("resize", schedule); document.fonts?.removeEventListener("loadingdone", schedule); if (frame !== null) window.cancelAnimationFrame(frame); };
+    return () => { stopped = true; observer?.disconnect(); window.removeEventListener("resize", schedule); container.removeEventListener(architectureTypesetEvent, schedule); document.fonts?.removeEventListener("loadingdone", schedule); if (frame !== null) window.cancelAnimationFrame(frame); };
   }, [containerRef, geometry]);
   const paths = useMemo(() => {
     const bounds = connectionBounds(layout.rectangles);
@@ -145,5 +147,6 @@ export function ArchitectureConnections({ containerRef, edges }: { containerRef:
   return <svg className="ma-connections" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="none" aria-hidden="true">
     <defs><marker id={marker} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="m2 2 6 3-6 3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></marker></defs>
     {edges.map((edge, index) => <path key={edge.id} data-connection={edge.id} data-from={edge.from} data-to={edge.to} data-kind={edge.kind ?? "main"} data-active={Boolean(edge.active)} d={paths[index]} markerEnd={`url(#${marker})`} />)}
+    <g className="ma-flow-particles">{geometry.map((edge, index) => <path key={edge.id} data-flow-particle={edge.id} data-kind={edge.kind ?? "main"} d={paths[index]} pathLength="100" style={{ "--flow-delay": `${index * -.27}s` } as CSSProperties} />)}</g>
   </svg>;
 }
