@@ -2,6 +2,7 @@
 
 use tauri::{Manager, RunEvent};
 mod gateway;
+mod history_export;
 mod selection;
 
 pub fn run() {
@@ -18,6 +19,7 @@ pub fn run() {
             gateway::start_gateway,
             gateway::stop_gateway,
             gateway::gateway_session,
+            history_export::save_history_export,
             selection::selection_configure,
             selection::selection_get_config,
             selection::selection_snapshot,

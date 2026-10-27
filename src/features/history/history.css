@@ -13,3 +13,5 @@
 .history-text { overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .history-search { grid-column: 1 / -1; } }
 @media (max-width: 600px) { .history-toolbar > span { width: 100%; margin-left: 0; } }
+section.history-page { padding-inline-start: 8px; }
+.history-export-status { overflow-wrap: anywhere; }
