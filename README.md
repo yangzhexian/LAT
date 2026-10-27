@@ -4,7 +4,7 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.2.1-beta.8`（模型架构堆叠视图验收版）
+> 当前版本：`0.2.1-beta.9`（验收反馈修订版）
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
@@ -29,9 +29,9 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 - 翻译过程中显示推理进度和整数 tokens/s，完成后保留最终速度、耗时和生成 token 数
 - 从应用启动持续采集 NVIDIA 整卡显存、利用率、功率和温度；模型页查看趋势，支持 0.5/1/2/5 秒采样及最近 1/2/5 分钟范围，切页和隐藏窗口不断采，退出后清空
 - 模型页展示推理输入/输出/总 token、生成及输入处理速度、首 token 延迟、耗时和本次网关会话的累计用量；质量重试与长文分段分别计入实际模型调用，缺失的后端数据明确显示未知
-- 模型页通过“模型推理 / GPU 硬件”选项卡选择看板；模型与架构页使用外侧页面滚动，避免嵌套滚动条
-- 左侧“模型架构”将重复的 Transformer 结构合并为堆叠页面，前页仅展示所选一层的完整架构，层数标记与背页表示重复层；可切换真实层编号，进入 Attention/KV heads、FFN、Embedding、Output 和参数视图，保留主路及残差连线，分步骤教学动画支持暂停和减少动态效果，不表示实际权重数值或逐参数活动
-- 架构页按模型保留层、模块、张量、参数视图、教学步骤和滚动位置，切页返回后从暂停状态继续；同一窗口会话最多记忆八个模型，模型结构变化时自动回到总览
+- 模型页默认显示左侧“GPU 硬件”看板，右侧“模型推理”可按需切换；模型与架构页使用外侧页面滚动，避免嵌套滚动条
+- 左侧“模型架构”采用统一网格的连续画布，相同 Transformer 结构只展示一份堆叠示意，不再提供重复的逐层架构选项；可进入 Attention/KV heads、FFN、Embedding、Output，公式由本地 LaTeX 排版，连线、矩阵和缓存动画支持暂停及减少动态效果，不表示实际权重数值或逐参数活动
+- 架构与参数查看分开，参数区可按真实层编号查看独立张量；按模型保留模块、参数层、张量、视图、手动说明和滚动位置，切页返回后保持暂停，同一窗口会话最多记忆八个模型，模型结构变化时自动回到总览
 - 关闭模型时终止 LAT 管理的 llama-server 并释放显存
 - 提供 OpenAI 兼容接口，可供 nextai-translator 等客户端调用
 
@@ -48,7 +48,7 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 
 固定浮窗后再次划词会更新原文和译文，并保留你调整后的窗口位置与尺寸；取消固定后恢复跟随新选区定位。
 
-本版将模型架构总览改为单层堆叠视图，详见 [beta.8 发布说明](docs/releases/v0.2.1-beta.8.md) 和 [模型架构浏览设计](docs/design/model-architecture.md)。历史检索、导航记忆与通用控件沿用 [第三轮设计](docs/design/history-navigation-round3.md)。所有版本继续共用一份 [统一验收清单](docs/acceptance/lat-acceptance-checklist.md)，旧勾选、原文样例与反馈保存在该文件的历史附录中。此前的 [运行时设计](docs/design/runtime-stability.md)、[第二轮性能设计](docs/design/performance-round2.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md) 继续适用。
+本版修复 beta.8 验收中的搜索焦点裁切和桌面历史导出，重设计架构画布与动画，并默认显示 GPU 看板，详见 [beta.9 发布说明](docs/releases/v0.2.1-beta.9.md) 和 [模型架构浏览设计](docs/design/model-architecture.md)。桌面导出 JSON/Markdown 时弹出原生另存为对话框，成功后明确显示实际路径；浏览器开发模式使用浏览器下载列表。所有版本继续共用一份 [统一验收清单](docs/acceptance/lat-acceptance-checklist.md)，beta.8 的用户勾选和七条原始反馈完整保留在历史附录中。此前的 [第三轮设计](docs/design/history-navigation-round3.md)、[运行时设计](docs/design/runtime-stability.md)、[第二轮性能设计](docs/design/performance-round2.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md) 继续适用。
 
 主窗口的 LaTeX 预览最多排版前 4,000 个 UTF-16 字符、40 个完整公式，遇到未闭合公式时在其前停止，并显示范围提示；“文本”视图、复制及历史始终保留全文。GPU 历史从网关启动持续采集，原生 NVML 不可用时自动使用较低频率的兼容采集，并显示实际周期。
 
