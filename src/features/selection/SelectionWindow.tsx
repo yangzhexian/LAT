@@ -167,12 +167,12 @@ export function SelectionWindow() {
         <div className="selection-actions">
           <Button className="icon-button" aria-label={pinned ? "取消固定窗口" : "固定窗口"} title={pinned ? "取消固定" : "固定窗口"} aria-pressed={pinned} onClick={() => void togglePin()}><ActionIcon name="pin" /></Button>
           <Button className="icon-button" aria-label="转到主窗口" title="转到主窗口" disabled={busy} onClick={() => void transfer(view.source || undefined)}><ActionIcon name="expand" /></Button>
-          <Button className="icon-button" aria-label="关闭划词翻译" title="关闭 · Esc" onClick={() => void close()}><Icon name="close" /></Button>
+          <Button className="icon-button" aria-label="关闭划词翻译" title="关闭 (Esc)" onClick={() => void close()}><Icon name="close" /></Button>
         </div>
       </header>
       <div className="selection-language-bar"><span>自动检测<Icon name="swap" /></span><label>译为
         <select aria-label="划词目标语言" value={config.targetLanguage} disabled={busy} onChange={(event) => void setLanguage(event.target.value)}>
-          {LANGUAGES.filter((language) => language.code !== "auto").map((language) => <option key={language.code} value={language.code}>{language.label} · {language.name}</option>)}
+          {LANGUAGES.filter((language) => language.code !== "auto").map((language) => <option key={language.code} value={language.code}>{language.label} ({language.name})</option>)}
         </select></label></div>
       <div className="selection-content">
         <section className="selection-source">

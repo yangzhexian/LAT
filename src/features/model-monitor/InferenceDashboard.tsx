@@ -36,7 +36,7 @@ function CallTrend({ history }: { history: InferenceRecord[] }) {
     return command;
   }).join(" ");
   return <figure className="inference-call-trend" aria-label="最近模型调用的生成速度，按调用顺序排列，缺失数据留空">
-    <figcaption><strong>调用速度轨迹</strong><span>最近 {calls.length} 次 · tok/s · 每点为一次真实调用</span></figcaption>
+    <figcaption><strong>调用速度轨迹</strong><span>最近 {calls.length} 次，tok/s，每点为一次真实调用</span></figcaption>
     <svg viewBox="0 0 400 110" aria-hidden="true">
       <defs><linearGradient id={gradient} x1="0" x2="1"><stop stopColor="var(--accent)" /><stop offset="1" stopColor="var(--success)" /></linearGradient></defs>
       {[18, 52, 86].map((y) => <line key={y} x1="12" x2="388" y1={y} y2={y} className="chart-grid" />)}
@@ -60,18 +60,18 @@ export function InferenceDashboard({ inference, connected = true }: {
   const speedNote = record?.speed_source === "llama.cpp" ? "llama.cpp 推理计时" : record?.speed_source === "wall_clock" ? "墙钟时间计算" : "等待推理计时";
   const { summary } = inference;
   return <section className="inference-dashboard" aria-label="模型推理性能" data-connected={connected}>
-    <header className="inference-heading"><div><span className="inference-kicker">INFERENCE OBSERVATORY</span><h2>模型推理</h2><p>{record ? `${!connected ? "上次观测" : active ? "当前调用" : "最近调用"} · ${record.model} · ${!connected ? "状态待重新确认" : statusLabels[record.status]}${record.segment_index != null ? ` · 分段 ${record.segment_index}` : ""} · 尝试 ${record.attempt}` : "等待首次模型调用"}</p></div><span className={`inference-phase-pill phase-${phase}`}><i aria-hidden="true" />{!connected ? "连接中断" : active ? phaseLabels[phase] : "待命"}</span></header>
+    <header className="inference-heading"><div><span className="inference-kicker">INFERENCE OBSERVATORY</span><h2>模型推理</h2><p>{record ? `${!connected ? "上次观测" : active ? "当前调用" : "最近调用"}，${record.model}，${!connected ? "状态待重新确认" : statusLabels[record.status]}${record.segment_index != null ? `，分段 ${record.segment_index}` : ""}，尝试 ${record.attempt}` : "等待首次模型调用"}</p></div><span className={`inference-phase-pill phase-${phase}`}><i aria-hidden="true" />{!connected ? "连接中断" : active ? phaseLabels[phase] : "待命"}</span></header>
     <div className="inference-metrics">
       <Metric name="生成速度" value={rate(record?.tokens_per_second)} unit="tok/s" note={speedNote} prominent />
-      <Metric name="输入处理速度" value={rate(record?.prompt_tokens_per_second)} unit="tok/s" note={record?.prompt_ms != null ? `输入用时 ${duration(record.prompt_ms)} · llama.cpp` : "等待 llama.cpp prompt 计时"} />
+      <Metric name="输入处理速度" value={rate(record?.prompt_tokens_per_second)} unit="tok/s" note={record?.prompt_ms != null ? `输入用时 ${duration(record.prompt_ms)}，llama.cpp` : "等待 llama.cpp prompt 计时"} />
       <Metric name="输入 tokens" value={number(record?.prompt_tokens)} note={tokenNote} />
       <Metric name="输出 tokens" value={number(record?.generated_tokens)} note={tokenNote} />
-      <Metric name="总 tokens" value={number(record?.total_tokens)} note="输入 + 输出 · 非字符数" />
+      <Metric name="总 tokens" value={number(record?.total_tokens)} note="输入 + 输出，非字符数" />
       <Metric name="首段输出延迟" value={duration(record?.first_token_ms)} note="网关观测，含调度与传输" />
-      <Metric name="调用耗时" value={record ? duration(record.elapsed_ms) : "—"} note={!connected ? "上次观测 · 墙钟时间" : active ? "进行中 · 墙钟时间" : "整个调用 · 墙钟时间"} />
+      <Metric name="调用耗时" value={record ? duration(record.elapsed_ms) : "—"} note={!connected ? "上次观测，墙钟时间" : active ? "进行中，墙钟时间" : "整个调用，墙钟时间"} />
       <Metric name="生成耗时" value={duration(record?.decode_ms)} note="llama.cpp decode 计时" />
     </div>
     <p className="inference-stage-note">阶段按请求与首段流式输出推断。等待阶段包含调度、输入处理与通信，并非实测 prefill 进度。</p>
-    <div className="inference-session"><section className="inference-session-summary"><span className="inference-kicker">GATEWAY SESSION</span><h3>本次网关会话</h3><div className="inference-session-total"><strong>{number(summary.total_tokens)}</strong><span>tokens{summary.unknown_token_calls > 0 ? " · 已知下限" : " · 已统计总量"}</span></div><p>输入 {number(summary.prompt_tokens)} · 输出 {number(summary.generated_tokens)}{summary.unknown_token_calls > 0 ? ` · ${number(summary.unknown_token_calls)} 次调用统计不完整` : " · llama.cpp token 用量"}</p><dl><div><dt>模型调用</dt><dd>{number(summary.calls)}</dd></div><div><dt>完成</dt><dd>{number(summary.completed_calls)}</dd></div><div><dt>取消</dt><dd>{number(summary.cancelled_calls)}</dd></div><div><dt>失败</dt><dd>{number(summary.failed_calls)}</dd></div></dl><small>Token 累计为已结束调用用量 · 调用次数含进行中 · 分段与重试分别计数 · 网关重启后清零</small></section><CallTrend history={inference.history} /></div>
+    <div className="inference-session"><section className="inference-session-summary"><span className="inference-kicker">GATEWAY SESSION</span><h3>本次网关会话</h3><div className="inference-session-total"><strong>{number(summary.total_tokens)}</strong><span>tokens{summary.unknown_token_calls > 0 ? "，已知下限" : "，已统计总量"}</span></div><p>输入 {number(summary.prompt_tokens)}，输出 {number(summary.generated_tokens)}{summary.unknown_token_calls > 0 ? `，${number(summary.unknown_token_calls)} 次调用统计不完整` : "，llama.cpp token 用量"}</p><dl><div><dt>模型调用</dt><dd>{number(summary.calls)}</dd></div><div><dt>完成</dt><dd>{number(summary.completed_calls)}</dd></div><div><dt>取消</dt><dd>{number(summary.cancelled_calls)}</dd></div><div><dt>失败</dt><dd>{number(summary.failed_calls)}</dd></div></dl><small>Token 累计为已结束调用用量，调用次数含进行中，分段与重试分别计数，网关重启后清零</small></section><CallTrend history={inference.history} /></div>
   </section>;
 }

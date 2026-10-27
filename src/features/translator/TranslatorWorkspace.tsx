@@ -46,7 +46,7 @@ function completedMetrics(metrics: TranslationMetrics | null): string {
     metrics.generated_tokens != null ? metrics.generated_tokens + " tokens" : "",
   ]
     .filter(Boolean)
-    .join(" · ");
+    .join("，");
 }
 
 export function TranslatorWorkspace({
@@ -240,7 +240,7 @@ export function TranslatorWorkspace({
           if (event.type === "plan") {
             setTranslation(event.translation || "");
           }
-          if (event.type === "waiting") setMessage(event.message || (event.queue_position != null ? `等待模型空闲 · 排队位置 ${event.queue_position}` : "等待模型空闲"));
+          if (event.type === "waiting") setMessage(event.message || (event.queue_position != null ? `等待模型空闲，排队位置 ${event.queue_position}` : "等待模型空闲"));
           if (event.type === "attempt" || event.type === "segment_complete") setMessage("模型正在生成译文…");
           if (event.type === "cancelled") setMessage(event.message || "已暂停，已完成分段保留，可继续翻译");
           if (event.type === "cancelled" && event.translation !== undefined) setTranslation(event.translation);
@@ -307,7 +307,7 @@ export function TranslatorWorkspace({
         </div>
         <div className="active-model">
           <span className={"status-dot " + (status.ready ? "ready" : "")} />
-          <span>{status.active_model || status.resolved_model || status.model_configured}<small>{status.ready ? "本地运行 · 已就绪" : "模型未启用"}</small></span>
+          <span>{status.active_model || status.resolved_model || status.model_configured}<small>{status.ready ? "本地运行，已就绪" : "模型未启用"}</small></span>
         </div>
         <div className="header-action">{page === "history" ?
           <DangerButton disabled={!historyCount || busy || modelBusy || selectionBusy || historyUpdating} onClick={() => { if (!busyRef.current && !modelBusy && !selectionBusy && window.confirm("清空全部翻译历史？此操作无法撤销。")) void applyHistoryAction({ clear: true }); }}>清空历史</DangerButton> :
@@ -319,7 +319,7 @@ export function TranslatorWorkspace({
       {page === "architecture" && <section className="architecture-page"><ModelArchitecturePage interval={settings.telemetryInterval} reduceMotion={settings.reduceMotion} /></section>}
       <div className="translation-page" hidden={page !== "translate"}>
       <div className="workspace-status" role="status">
-        {busy || canResume ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段 · ${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}% · ${message}` : message}
+        {busy || canResume ? `已完成 ${progress?.completed_chunks || 0}/${progress?.total_chunks || "…"} 段，${Math.floor((progress?.completed_chars || 0) / Math.max(1, progress?.total_chars || 1) * 100)}%，${message}` : message}
       </div>
       {pendingHistory.length > 0 && <Notice tone="error">有 {pendingHistory.length} 条完整翻译待保存，可逐条重试；退出应用后未保存的记录将丢失。<Button disabled={busy || historyUpdating} onClick={() => void retryHistorySave()}>重试保存历史</Button></Notice>}
       {(busy || canResume) && <progress className="translation-progress" aria-label="翻译总进度" max={progress?.total_chars || 1} value={progress?.completed_chars || 0} />}
@@ -365,8 +365,8 @@ export function TranslatorWorkspace({
       </div>
       <footer className="translation-footer">
         <div className="progress-copy">
-          <span>{sourceChars.toLocaleString()} / {inputLimit.toLocaleString()} 字符{sourceChars > inputLimit ? " · 超过输入上限" : ""}</span><br />
-          {busy ? "约 " + speed + " tokens/s · " + elapsed : completedMetrics(metrics)}
+          <span>{sourceChars.toLocaleString()} / {inputLimit.toLocaleString()} 字符{sourceChars > inputLimit ? "，超过输入上限" : ""}</span><br />
+          {busy ? "约 " + speed + " tokens/s，" + elapsed : completedMetrics(metrics)}
         </div>
         {busy && <Button className="secondary-button" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? "正在取消…" : "取消翻译"}</Button>}
         {canResume && !busy && <Button className="secondary-button" onClick={() => void translate(true)}>重新翻译</Button>}

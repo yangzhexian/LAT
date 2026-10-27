@@ -30,13 +30,11 @@ test('GPU dashboard charts real samples, distinguishes unavailable data and stop
   try {
     await React.act(async () => root.render(React.createElement(ModelDashboard, { interval: .02 })));
     await React.act(async () => new Promise((r) => setTimeout(r, 55)));
-    assert.equal(document.querySelector('[role="tab"][aria-selected="true"]').textContent, '模型推理');
-    assert.equal(document.querySelector('.gpu-section'), null);
-    assert.ok(urls.every((url) => url.endsWith('/telemetry/inference')), 'inference tab does not request GPU or architecture');
-    const switchedAt = urls.length;
-    await React.act(async () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === 'GPU 硬件').click());
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    assert.deepEqual(tabs.map((tab) => tab.textContent), ['GPU 硬件', '模型推理']);
+    assert.equal(document.querySelector('[role="tab"][aria-selected="true"]').textContent, 'GPU 硬件');
     assert.equal(document.querySelectorAll('svg[role="img"]').length, 4);
-    assert.ok(urls.slice(switchedAt).every((url) => url.includes('/telemetry/gpu')), 'GPU tab only requests GPU');
+    assert.ok(urls.every((url) => url.includes('/telemetry/gpu')), 'default GPU tab does not request inference or architecture');
     assert.doesNotMatch(document.body.textContent, /GPU MONITOR|整卡实时数据，包含其他程序占用/);
     assert.match(document.querySelector('.gpu-heading').textContent, /最近 2 分钟/);
     assert.match(document.querySelector('.metric-chart').textContent, /120 秒/);
@@ -45,6 +43,16 @@ test('GPU dashboard charts real samples, distinguishes unavailable data and stop
     assert.match(document.querySelector('.metric-power_w').textContent, /暂不可用/);
     assert.match(document.querySelector('.metric-utilization_pct').textContent, /0 %/);
     assert.ok(document.querySelector('.metric-memory_used_mib path').getAttribute('d').includes('L'));
+    const switchedAt = urls.length;
+    await React.act(async () => tabs[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
+    assert.equal(document.activeElement, tabs[1]);
+    assert.equal(tabs[1].getAttribute('aria-selected'), 'true');
+    assert.equal(document.querySelector('.gpu-section'), null);
+    assert.ok(urls.slice(switchedAt).every((url) => url.endsWith('/telemetry/inference')), 'inference tab only requests inference');
+    await React.act(async () => tabs[1].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
+    assert.equal(document.activeElement, tabs[0]);
+    assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
+    assert.equal(document.querySelectorAll('svg[role="img"]').length, 4);
     globalThis.fetch = async () => { calls++; throw new Error('offline'); };
     await React.act(async () => new Promise((r) => setTimeout(r, 40)));
     assert.match(document.querySelector('[role="status"]').textContent, /连接中断/);
@@ -89,8 +97,7 @@ test('GPU tab merges incremental samples, displays provider cadence, resets sess
   try {
     await render();
     assert.equal(calls.length, 1);
-    assert.ok(calls[0].endsWith('/telemetry/inference'));
-    await tab('GPU 硬件');
+    assert.ok(calls[0].endsWith('/telemetry/gpu'));
     assert.match(document.querySelector('.gpu-heading').textContent, /每 2 秒刷新/);
     assert.match(document.body.textContent, /nvidia-smi.*NVML unavailable/);
     assert.equal(chart().includes('L'), false, 'two minute view filters the older retained sample');

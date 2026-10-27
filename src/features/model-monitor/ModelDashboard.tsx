@@ -42,12 +42,12 @@ function Trend({ samples, gpu, metric, windowSeconds }: { samples: TelemetrySamp
       {values.length === 1 && values[0].value !== null && <circle cx="400" cy={130 - values[0].value / max * 120} r="3" fill="currentColor" />}
       <text x="0" y="155">{windowSeconds} 秒</text><text x="373" y="155">现在</text>
     </svg>
-    <p>{metric.key === "memory_used_mib" ? `整卡显存 · 总量 ${gpu.memory_total_mib === null ? "未知" : (gpu.memory_total_mib / 1024).toFixed(1) + " GiB"}` : metric.key === "power_w" ? `整卡功耗 · 功率上限 ${gpu.power_limit_w ?? "未知"} W` : metric.key === "temperature_c" ? "GPU 核心温度 · 实时趋势" : "整卡计算负载 · 实时趋势"}</p>
+    <p>{metric.key === "memory_used_mib" ? `整卡显存，总量 ${gpu.memory_total_mib === null ? "未知" : (gpu.memory_total_mib / 1024).toFixed(1) + " GiB"}` : metric.key === "power_w" ? `整卡功耗，功率上限 ${gpu.power_limit_w ?? "未知"} W` : metric.key === "temperature_c" ? "GPU 核心温度，实时趋势" : "整卡计算负载，实时趋势"}</p>
   </article>;
 }
 
 export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval?: number; windowSeconds?: number; reduceMotion?: boolean }) {
-  const [view, setView] = useState<"inference" | "gpu">("inference");
+  const [view, setView] = useState<"inference" | "gpu">("gpu");
   const tabId = useId();
   const [samples, setSamples] = useState<TelemetrySample[]>([]);
   const [latest, setLatest] = useState<TelemetrySnapshot | null>(null);
@@ -108,16 +108,16 @@ export function ModelDashboard({ interval = 2, windowSeconds = 120 }: { interval
   }, [interval, view]);
   return <div className="model-dashboard">
     <Tabs id={tabId} label="性能监测视图" value={view} onChange={setView}
-      options={[{ value: "inference", label: "模型推理" }, { value: "gpu", label: "GPU 硬件" }]} className="preview-tabs monitor-tabs" />
+      options={[{ value: "gpu", label: "GPU 硬件" }, { value: "inference", label: "模型推理" }]} className="preview-tabs monitor-tabs" />
     {error && <Notice className="monitor-notice">{error}</Notice>}
     <div role="tabpanel" id={`${tabId}-inference-panel`} aria-labelledby={`${tabId}-inference-tab`} hidden={view !== "inference"} tabIndex={0}>
       {view === "inference" && (inference ? <InferenceDashboard inference={inference} connected={connected} /> : !error && <EmptyState title="正在读取推理监测…" />)}
     </div>
     <div role="tabpanel" id={`${tabId}-gpu-panel`} aria-labelledby={`${tabId}-gpu-tab`} hidden={view !== "gpu"} tabIndex={0}>
       {view === "gpu" && <>
-        {latest?.provider_message && <Notice className="monitor-notice">采样来源：{latest.provider || "暂不可用"} · {latest.provider_message}</Notice>}
+        {latest?.provider_message && <Notice className="monitor-notice">采样来源：{latest.provider || "暂不可用"}，{latest.provider_message}</Notice>}
         {latest?.message && <Notice className="monitor-notice">{latest.message}</Notice>}
-        {latest?.gpus.map((gpu) => <section key={gpu.id} className="gpu-section"><header className="gpu-heading"><h2>{gpu.name}</h2><span>{error || latest.message ? "数据暂不可用 · " : ""}每 {effectiveInterval} 秒刷新 · {new Date(latest.timestamp * 1000).toLocaleTimeString()} · 最近 {windowSeconds / 60} 分钟</span></header><div className="metrics-grid">{metrics.map((metric) => <Trend key={metric.key} samples={visibleSamples} gpu={gpu} metric={metric} windowSeconds={windowSeconds} />)}</div></section>)}
+        {latest?.gpus.map((gpu) => <section key={gpu.id} className="gpu-section"><header className="gpu-heading"><h2>{gpu.name}</h2><span>{error || latest.message ? "数据暂不可用，" : ""}每 {effectiveInterval} 秒刷新，{new Date(latest.timestamp * 1000).toLocaleTimeString()}，最近 {windowSeconds / 60} 分钟</span></header><div className="metrics-grid">{metrics.map((metric) => <Trend key={metric.key} samples={visibleSamples} gpu={gpu} metric={metric} windowSeconds={windowSeconds} />)}</div></section>)}
         {!latest && !error && <EmptyState title="正在读取显卡…" />}
         {latest && !latest.gpus.length && <EmptyState title="显卡监测暂不可用">本地翻译仍可使用，支持的数值恢复后会自动更新。</EmptyState>}
       </>}

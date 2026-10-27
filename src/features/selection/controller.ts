@@ -111,7 +111,7 @@ export class SelectionController {
         }
         if (event.type === "plan") this.update({ translation: event.translation || "", message: "正在翻译…" });
         if (event.type === "waiting") this.update({ message: event.message || (event.queue_position
-          ? `正在排队 · 第 ${event.queue_position} 位` : "正在等待当前分段完成…") });
+          ? `正在排队，第 ${event.queue_position} 位` : "正在等待当前分段完成…") });
         if (event.type === "attempt") this.update({ message: "正在翻译…" });
         if (event.type === "segment_complete") this.update({ translation: this.view.translation + (event.translation || ""), message: "正在翻译…" });
         if (event.type === "retry") this.update({ message: "正在重新校验当前分段…" });

@@ -66,7 +66,7 @@ test('inference dashboard shows token usage, timings, segment index and session 
     assert.match(metric('首段输出延迟').textContent, /425 ms.*网关观测/);
     assert.match(metric('调用耗时').textContent, /3\.20 s/);
     assert.match(document.querySelector('.inference-heading').textContent, /当前调用.*分段 1.*尝试 1.*生成输出/);
-    assert.match(document.querySelector('.inference-session-summary').textContent, /175tokens · 已知下限.*1 次调用统计不完整/);
+    assert.match(document.querySelector('.inference-session-summary').textContent, /175tokens，已知下限.*1 次调用统计不完整/);
     assert.equal(document.querySelector('.inference-architecture'), null);
     assert.equal(document.querySelector('.inference-motion-button'), null);
     assert.equal(document.querySelector('.inference-stage-bar'), null);
@@ -145,19 +145,20 @@ test('monitor tabs poll only the selected endpoint with accessible keyboard navi
   try {
     const tabs = [...document.querySelectorAll('[role="tab"]')];
     assert.equal(tabs.length, 2);
+    assert.deepEqual(tabs.map((tab) => tab.textContent), ['GPU 硬件', '模型推理']);
     assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
     assert.equal(tabs[0].tabIndex, 0);
     assert.equal(tabs[1].tabIndex, -1);
     assert.equal(document.querySelectorAll('[role="tabpanel"]:not([hidden])').length, 1);
-    assert.equal(document.querySelector('.gpu-section'), null);
-    assert.ok(document.querySelector('.inference-dashboard'));
+    assert.ok(document.querySelector('.gpu-section'));
+    assert.equal(document.querySelector('.inference-dashboard'), null);
     for (const tab of tabs) {
       const panel = document.getElementById(tab.getAttribute('aria-controls'));
       assert.equal(panel.getAttribute('aria-labelledby'), tab.id);
     }
     await h.React.act(async () => tabs[1].click());
-    assert.ok(document.querySelector('.gpu-section'));
-    assert.equal(document.querySelector('.inference-dashboard'), null);
+    assert.equal(document.querySelector('.gpu-section'), null);
+    assert.ok(document.querySelector('.inference-dashboard'));
     await h.React.act(async () => tabs[1].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })));
     assert.equal(document.activeElement, tabs[0]);
     assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
@@ -168,7 +169,7 @@ test('monitor tabs poll only the selected endpoint with accessible keyboard navi
     await h.React.act(async () => tabs[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'End', bubbles: true })));
     assert.equal(document.activeElement, tabs[1]);
     assert.equal(document.querySelectorAll('[role="tabpanel"]:not([hidden])').length, 1);
-    assert.deepEqual(requests, ['/admin/telemetry/inference', '/admin/telemetry/gpu', '/admin/telemetry/inference', '/admin/telemetry/gpu', '/admin/telemetry/inference', '/admin/telemetry/gpu']);
+    assert.deepEqual(requests, ['/admin/telemetry/gpu', '/admin/telemetry/inference', '/admin/telemetry/gpu', '/admin/telemetry/inference', '/admin/telemetry/gpu', '/admin/telemetry/inference']);
   } finally { await h.close(); globalThis.fetch = originalFetch; }
 });
 
@@ -176,19 +177,22 @@ test('dashboard preserves metrics on disconnect and resumes one poll after hidin
   const originalFetch = globalThis.fetch;
   let calls = 0;
   let signal;
-  globalThis.fetch = async (_url, options) => {
+  globalThis.fetch = async (url, options) => {
     calls++;
+    if (url.includes('/telemetry/gpu')) return Response.json({ timestamp: 0, gpus: [], samples: [], message: '' });
     signal = options.signal;
     return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
   };
   const h = await harness({ interval: .01 }, true);
   try {
     assert.equal(calls, 1);
+    await h.React.act(async () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === '模型推理').click());
+    assert.equal(calls, 2);
     Object.defineProperty(document, 'hidden', { configurable: true, value: true });
     await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));
     assert.equal(signal.aborted, true);
     await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     globalThis.fetch = async (url) => { calls++; assert.ok(url.endsWith('/telemetry/inference')); return Response.json(snapshot()); };
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
     await h.React.act(async () => document.dispatchEvent(new window.Event('visibilitychange')));

@@ -27,7 +27,7 @@ interface ModelSelectorProps {
 }
 
 function optionLabel(option: ModelOption): string {
-  return option.label + " · " + option.size_gib.toFixed(2) + " GiB";
+  return option.label + "，" + option.size_gib.toFixed(2) + " GiB";
 }
 
 export function ModelSelector({
@@ -63,7 +63,7 @@ export function ModelSelector({
   const displayedDirectory = dataDirectory || defaultDataDirectory;
   const fileProgress =
     download.fileCount > 0
-      ? "第 " + Math.max(1, download.fileIndex) + "/" + download.fileCount + " 项 · "
+      ? "第 " + Math.max(1, download.fileIndex) + "/" + download.fileCount + " 项，"
       : "";
 
   useEffect(() => {
@@ -95,7 +95,7 @@ export function ModelSelector({
             <div>
               <strong>{selectedLocalModel?.name || "请选择模型"}</strong>
               <small>
-                {selectedLocalModel?.size ? formatBytes(selectedLocalModel.size) : "未知大小"} · GGUF
+                {selectedLocalModel?.size ? formatBytes(selectedLocalModel.size) : "未知大小"}，GGUF
               </small>
             </div>
             <span className="collapsible-chevron" aria-hidden="true" />
@@ -114,7 +114,7 @@ export function ModelSelector({
                 <span className="status-dot model-status-dot" aria-hidden="true" />
                 <span className="model-copy">
                   <strong>{model.name}</strong>
-                  <small>{model.size ? formatBytes(model.size) : "未知大小"} · GGUF</small>
+                  <small>{model.size ? formatBytes(model.size) : "未知大小"}，GGUF</small>
                 </span>
               </Button>
             ))}
@@ -145,18 +145,18 @@ export function ModelSelector({
               {downloadOptions.map((option) => (
                 <option key={option.id} value={option.id}>
                   {optionLabel(option)}
-                  {option.recommended ? " · 推荐" : ""}
+                  {option.recommended ? "，推荐" : ""}
                 </option>
               ))}
             </select>
             {selectedOption && (
               <small className="model-download-meta">
-                {selectedOption.parameter_size} 参数 · {selectedOption.quantization} · 建议总显存 {
+                {selectedOption.parameter_size} 参数，{selectedOption.quantization}，建议总显存 {
                   selectedOption.recommended_vram_gib
                 } GiB
                 {download.environment?.best_gpu && (
                   <>
-                    {" · "}
+                    {"，"}
                     当前设备 {download.environment.best_gpu.name} 总显存{" "}
                     {download.environment.best_gpu.total_vram_gib.toFixed(2)} GiB
                   </>
@@ -186,13 +186,13 @@ export function ModelSelector({
           <div className="download-progress">
             <div className="download-progress-label">
               <span>
-                {download.phase ? download.phase + " · " : ""}
+                {download.phase ? download.phase + "，" : ""}
                 {download.status || "准备下载"}
-                {download.fileName ? " · " + download.fileName : ""}
+                {download.fileName ? "，" + download.fileName : ""}
               </span>
               <span>
                 {fileProgress}
-                {download.percent.toFixed(1)}% · {download.speedMiB.toFixed(2)} MiB/s
+                {download.percent.toFixed(1)}%，{download.speedMiB.toFixed(2)} MiB/s
               </span>
             </div>
             <div className="progress-track">
