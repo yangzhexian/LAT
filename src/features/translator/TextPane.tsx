@@ -1,5 +1,6 @@
 import { Button } from "../../components/Controls";
-import { LatexPreview } from "../../components/LatexPreview";
+import { memo } from "react";
+import { BoundedLatexPreview } from "./BoundedLatexPreview";
 import { LanguageSelect } from "./LanguageSelect";
 
 interface TextPaneProps {
@@ -7,6 +8,7 @@ interface TextPaneProps {
   language: string;
   value: string;
   preview: boolean;
+  visible?: boolean;
   fontSize: number;
   readOnly?: boolean;
   languageDisabled?: boolean;
@@ -16,11 +18,12 @@ interface TextPaneProps {
   onSubmit?: () => void;
 }
 
-export function TextPane({
+export const TextPane = memo(function TextPane({
   title,
   language,
   value,
   preview,
+  visible = true,
   fontSize,
   readOnly,
   languageDisabled,
@@ -53,8 +56,8 @@ export function TextPane({
           </Button>
         </div>
       </header>
-      {preview ? (
-        <LatexPreview value={value} />
+      {preview && visible ? (
+        <BoundedLatexPreview value={value} />
       ) : (
         <textarea
           className="text-editor"
@@ -75,4 +78,4 @@ export function TextPane({
       )}
     </section>
   );
-}
+});

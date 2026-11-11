@@ -1,17 +1,25 @@
 import type { UserSettings } from "../../types";
 import { Button, OptionGroup, SelectField, Switch } from "../../components/Controls";
 import { Icon } from "../../components/Icon";
+import { ShortcutField } from "../../components/ShortcutField";
+import { LANGUAGES } from "../../lib/languages";
 
 interface SettingsPanelProps {
   settings: UserSettings;
   onChange: (next: Partial<UserSettings>) => void;
   onClose: () => void;
+  selectionError?: string;
+  selectionPaused?: boolean;
 }
 
-export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ settings, onChange, onClose, selectionError, selectionPaused }: SettingsPanelProps) {
   function changeHistoryLimit(value: number) {
     if (value < (settings.historyLimit ?? 30) && !window.confirm(`改为 ${value} 条后，超出的旧记录将被删除。继续？`)) return;
     onChange({ historyLimit: value });
+  }
+  function changeHistoryStorage(value: number) {
+    if (value < (settings.historyStorageMiB ?? 64) && !window.confirm(`改为 ${value} MiB 后，超出容量的旧记录将被删除。继续？`)) return;
+    onChange({ historyStorageMiB: value });
   }
   return <div className="settings-page"><section className="settings-panel" aria-label="设置">
     <header className="settings-header">
@@ -19,6 +27,16 @@ export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProp
       <Button className="icon-button" onClick={onClose} aria-label="关闭设置"><Icon name="close" /></Button>
     </header>
     <div className="settings-grid">
+      <section className="settings-section selection-settings"><h3>划词翻译</h3><p>在其他软件选中文字，点击浮标或按快捷键翻译</p>
+        <Switch label="启用划词翻译" hint="仅 Windows 桌面版；点击浮标后才调用本地模型" checked={settings.selectionEnabled ?? false}
+          onChange={(selectionEnabled) => onChange({ selectionEnabled, ...(selectionEnabled && !settings.selectionOnboarded ? { selectionCloseToTray: true, selectionOnboarded: true } : {}) })} />
+        <ShortcutField value={settings.selectionShortcut || "Ctrl+Alt+T"} onChange={(selectionShortcut) => onChange({ selectionShortcut })} />
+        <Switch label="允许复制兜底" hint="直接取词失败时，主动触发翻译才模拟复制；复杂剪贴板会提示手动粘贴" checked={settings.selectionClipboardFallback ?? true} onChange={(selectionClipboardFallback) => onChange({ selectionClipboardFallback })} />
+        <Switch label="关闭到托盘" hint="关闭主窗口后保留本地模型；在托盘菜单中退出可释放显存" checked={settings.selectionCloseToTray ?? false} onChange={(selectionCloseToTray) => onChange({ selectionCloseToTray })} />
+        <label className="setting-select"><span>划词目标语言<small>原文自动检测，独立于主窗口</small></span><select value={settings.selectionTargetLanguage || "zh"} onChange={(event) => onChange({ selectionTargetLanguage: event.target.value })}>{LANGUAGES.filter((item) => item.code !== "auto").map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label>
+        {selectionPaused && <p className="settings-note" role="status">划词监听已从托盘暂停，可在托盘菜单中恢复。</p>}
+        {selectionError && <p className="settings-note selection-error" role="alert">{selectionError}</p>}
+      </section>
       <section className="settings-section"><h3>主题</h3><p>选择工作区的明暗外观</p>
         <OptionGroup label="主题" value={settings.theme} onChange={(theme) => onChange({ theme })} options={[{ value: 'light', label: '浅色', icon: 'sun' }, { value: 'dark', label: '深色', icon: 'moon' }]} />
       </section>
@@ -36,6 +54,7 @@ export function SettingsPanel({ settings, onChange, onClose }: SettingsPanelProp
       <section className="settings-section"><h3>历史记录</h3>
         <Switch label="保存翻译历史" hint="关闭后不再保存新记录，已有记录保留" checked={settings.saveHistory ?? true} onChange={(saveHistory) => onChange({ saveHistory })} />
         <SelectField label="最多保存" hint="超出上限时淘汰最早的记录" value={settings.historyLimit ?? 30} onChange={changeHistoryLimit}>{[10, 30, 50, 100, 200].map((value) => <option key={value} value={value}>{value} 条</option>)}</SelectField>
+        <SelectField label="存储容量" hint="逻辑数据容量；超出时淘汰最早的记录" value={settings.historyStorageMiB ?? 64} onChange={changeHistoryStorage}>{[16, 32, 64, 128].map((value) => <option key={value} value={value}>{value} MiB</option>)}</SelectField>
       </section>
       <section className="settings-section"><h3>显卡看板</h3>
         <SelectField label="刷新间隔" hint="从应用启动持续采样" value={settings.telemetryInterval ?? 2} onChange={(telemetryInterval) => onChange({ telemetryInterval })}>{[0.5, 1, 2, 5].map((value) => <option key={value} value={value}>{value} 秒</option>)}</SelectField>

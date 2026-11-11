@@ -3,12 +3,13 @@ import tempfile
 import urllib.error
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from local_translator.catalog import DownloadAsset, get_model_variant
 from local_translator.config import Settings
-from local_translator.errors import LlamaError
+from local_translator.errors import LlamaError, ModelNotReadyError
 from local_translator.runtime import LlamaCppProcessManager
+from local_translator.llama_client import LlamaServerClient
 
 
 class FakeResponse:
@@ -33,6 +34,45 @@ class FakeResponse:
 
 
 class RuntimeDownloadTests(unittest.TestCase):
+    def test_install_selection_keeps_running_model_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(runtime_root=directory)
+            loaded_model = settings.model_name
+            manager = LlamaCppProcessManager(settings)
+            manager.client = LlamaServerClient("http://127.0.0.1:1234", settings)
+            manager.client.is_ready = Mock(return_value=True)
+            manager.owned_process = Mock()
+            manager.owned_process.poll.return_value = None
+            manager._server_executable = lambda: Path(directory) / "llama-server.exe"
+            manager._verified = lambda *_args: True
+            manager._download_model = lambda *_args: iter([])
+            selected_model = "hy-mt2-1.8b:q8_0"
+            list(manager.install_stream(selected_model))
+            self.assertEqual(settings.model_name, selected_model)
+            self.assertEqual(manager.ensure_server().resolve_model(), loaded_model)
+            status = manager.status()
+            self.assertEqual(status["model_configured"], selected_model)
+            self.assertEqual(status["active_model"], loaded_model)
+            self.assertEqual(status["running_models"][0]["name"], loaded_model)
+
+    def test_ready_only_requires_live_process_and_healthy_client(self):
+        manager = LlamaCppProcessManager(Settings())
+        manager.ensure_server = Mock()
+        with self.assertRaises(ModelNotReadyError):
+            manager.require_ready_server()
+        manager.owned_process = Mock()
+        manager.owned_process.poll.return_value = None
+        manager.client = Mock()
+        manager.client.is_ready.return_value = False
+        with self.assertRaises(ModelNotReadyError):
+            manager.require_ready_server()
+        manager.client.is_ready.return_value = True
+        self.assertIs(manager.require_ready_server(), manager.client)
+        manager.owned_process.poll.return_value = 1
+        with self.assertRaises(ModelNotReadyError):
+            manager.require_ready_server()
+        manager.ensure_server.assert_not_called()
+
     def test_model_download_prefers_hy_mt2_mirror(self):
         assets = get_model_variant().assets
 

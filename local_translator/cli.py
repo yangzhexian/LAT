@@ -18,7 +18,7 @@ def _gateway_request(settings: Settings, method: str, path: str, body: dict[str,
     request = urllib.request.Request(
         f"http://{settings.host}:{settings.port}{path}",
         data=data,
-        headers={"Content-Type": "application/json"} if data else {},
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + settings.admin_token},
         method=method,
     )
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -45,14 +45,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     settings = Settings.from_file(args.config)
     if args.command in {"serve", "start"}:
-        serve(settings)
-        return 0
+        try:
+            serve(settings)
+            return 0
+        except LlamaError as error:
+            print(str(error), file=sys.stderr)
+            return 1
     if args.command == "status":
         try:
             print(json.dumps(_gateway_request(settings, "GET", "/admin/status"), ensure_ascii=False, indent=2))
             return 0
-        except (urllib.error.URLError, OSError):
-            print("翻译网关未运行", file=sys.stderr)
+        except (urllib.error.URLError, OSError) as error:
+            print(f"无法读取翻译网关状态，请检查 LAT_ADMIN_TOKEN 和网关连接: {error}", file=sys.stderr)
             return 1
     if args.command == "unload":
         try:

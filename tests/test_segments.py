@@ -29,7 +29,7 @@ class Manager:
     def __init__(self):
         self.client = EchoClient()
 
-    def ensure_server(self):
+    def ensure_server(self, **_kwargs):
         return self.client
 
 
@@ -71,6 +71,7 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(progress, sorted(progress))
         self.assertEqual(progress[-1], len(source))
         self.assertEqual(manager.client.calls, 1)  # identical paragraphs reuse this request's result
+        self.assertEqual(engine.inference.snapshot()["summary"]["calls"], 1)
         self.assertEqual(manager.client.closed, manager.client.calls)
         self.assertEqual(engine.translate({"text": source, "target_language": "English"}).text, source)
 
@@ -102,15 +103,15 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(manager.client.calls, 1)
         self.assertEqual(manager.client.closed, 1)
 
-    def test_busy_request_rejected_and_lock_released_on_close(self):
+    def test_queued_request_runs_after_active_stream_closes(self):
         engine = TranslationEngine(Settings(), Manager())
         body = {"text": "hello", "target_language": "Chinese"}
         first = engine.translate_stream(body)
         next(first)
-        with self.assertRaisesRegex(TranslationRequestError, "translation_busy"):
-            list(engine.translate_stream(body))
+        queued = engine.translate_stream(body)
+        self.assertEqual(next(queued)["type"], "waiting")
         first.close()
-        self.assertEqual(list(engine.translate_stream(body))[-1]["type"], "complete")
+        self.assertEqual(list(queued)[-1]["type"], "complete")
 
     def test_resume_uses_authoritative_prefix_and_skips_finished_work(self):
         manager = Manager()
@@ -130,6 +131,10 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(manager.client.calls, 3)
         list(engine.translate_stream(dict(body, job_id=plan["job_id"])))
         self.assertEqual(manager.client.calls, 3)
+        snapshot = engine.inference.snapshot()
+        self.assertEqual(snapshot["summary"]["calls"], 3)
+        self.assertEqual([record["segment_index"] for record in snapshot["history"]], [1, 2, 3])
+        self.assertTrue(all(record["job_id"] == plan["job_id"] for record in snapshot["history"]))
 
     def test_cancel_preserves_checkpoint_and_changed_input_is_rejected(self):
         manager = Manager()

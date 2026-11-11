@@ -29,7 +29,7 @@ export function LanguageSelect({ value, onChange, disabled }: LanguageSelectProp
       <div className="language-dialog-body">
         <header className="settings-header"><div><p className="settings-kicker">LANGUAGE</p><h2 id={id + "-title"}>选择语言</h2></div>
           <Button type="button" className="icon-button" aria-label="关闭语言选择" onClick={() => dialog.current?.close()}><Icon name="close" /></Button></header>
-        <input ref={search} className="language-search" placeholder="搜索语言 · Search languages" aria-label="搜索语言" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={id + "-list"} aria-activedescendant={languages[cursor] ? id + "-" + languages[cursor].code : undefined}
+        <input ref={search} className="language-search" placeholder="搜索语言 (Search languages)" aria-label="搜索语言" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={id + "-list"} aria-activedescendant={languages[cursor] ? id + "-" + languages[cursor].code : undefined}
           value={query} onChange={(event) => { setQuery(event.target.value); setCursor(0); }} onKeyDown={(event) => {
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
               event.preventDefault(); const next = Math.max(0, Math.min(languages.length - 1, cursor + (event.key === "ArrowDown" ? 1 : -1))); setCursor(next);
@@ -43,7 +43,7 @@ export function LanguageSelect({ value, onChange, disabled }: LanguageSelectProp
           </Button>)}
         </div>
         {!languages.length && <p className="empty-hint">未找到匹配语言</p>}
-        <p className="settings-note">↑ ↓ 选择 · Enter 确认 · Esc 关闭</p>
+        <p className="settings-note">↑ ↓ 选择，Enter 确认，Esc 关闭</p>
       </div>
     </dialog>
   </>;

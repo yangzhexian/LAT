@@ -4,12 +4,14 @@ LAT 是面向 Windows 的本地 AI 翻译桌面应用。项目基于 Tauri 2、P
 
 LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送至云端。模型权重和 llama.cpp 运行时不包含在安装包中，而是在首次使用时下载到用户指定的本地数据目录。
 
-> 当前版本：`0.2.0-beta.3`
+> 当前版本：`0.2.1-beta.9`（验收反馈修订版）
 >
 > 当前 Windows 版本仅支持 NVIDIA CUDA 与 GGUF 模型。安装包不包含模型权重和运行时文件。
 
 ## 功能概览
 
+- Windows 划词翻译：选中文字后点击浮标或按自定义快捷键，在独立浮窗中使用当前本地模型翻译
+- UI Automation 原生取词优先，主动触发后可使用复制兜底；支持托盘驻留、暂停划词、浮窗固定及转入主窗口
 - 自动发现本机已安装并通过校验的 Hy-MT2 GGUF 模型
 - 从开始界面选择参数规模和量化版本
 - 使用 GPU 总显存进行环境预检并提供推荐版本
@@ -18,7 +20,7 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 - 支持中文、英文、日文、韩文、法文、德文、俄文等 Hy-MT2 支持语言的互译
 - 支持左右或上下排版，并可交换源语言与目标语言
 - 左侧导航提供翻译、历史、模型与设置；关闭模型后保留当前工作区
-- 翻译历史仅保存在本机 IndexedDB，默认保留最近 30 条，可选 10/30/50/100/200 条或关闭新记录保存，支持恢复、删除和清空
+- 翻译历史仅保存在本机 IndexedDB，默认保留最近 30 条及最多 64 MiB 内容，可选 10/30/50/100/200 条、16/32/64/128 MiB 或关闭新记录保存；支持全文搜索、语言/模型/来源筛选、20 条分页摘要、按需展开、恢复、删除、清空及 JSON/Markdown 完整导出
 - 默认支持 100,000 字符长文本，按段落及上下文预算分段，显示已完成段数与原文处理进度
 - 支持取消或失败后继续剩余分段；断点由本地网关在内存保留最多 1 小时、最近 8 个任务，退出应用后不保留；重复段落复用已校验译文
 - 支持明暗主题、自动字体大小、合并换行及减少动态效果设置
@@ -26,8 +28,33 @@ LAT 默认在本机完成模型推理和文本处理，不将翻译内容发送�
 - 使用本地 MathJax 渲染 LaTeX，预览字体采用 Times New Roman
 - 翻译过程中显示推理进度和整数 tokens/s，完成后保留最终速度、耗时和生成 token 数
 - 从应用启动持续采集 NVIDIA 整卡显存、利用率、功率和温度；模型页查看趋势，支持 0.5/1/2/5 秒采样及最近 1/2/5 分钟范围，切页和隐藏窗口不断采，退出后清空
+- 模型页展示推理输入/输出/总 token、生成及输入处理速度、首 token 延迟、耗时和本次网关会话的累计用量；质量重试与长文分段分别计入实际模型调用，缺失的后端数据明确显示未知
+- 模型页默认显示左侧“GPU 硬件”看板，右侧“模型推理”可按需切换；模型与架构页使用外侧页面滚动，避免嵌套滚动条
+- 左侧“模型架构”采用统一网格的连续画布，相同 Transformer 结构只展示一份堆叠示意，不再提供重复的逐层架构选项；可进入 Attention/KV heads、FFN、Embedding、Output，公式由本地 LaTeX 排版，连线、矩阵和缓存动画支持暂停及减少动态效果，不表示实际权重数值或逐参数活动
+- 架构与参数查看分开，参数区可按真实层编号查看独立张量；按模型保留模块、参数层、张量、视图、手动说明和滚动位置，切页返回后保持暂停，同一窗口会话最多记忆八个模型，模型结构变化时自动回到总览
 - 关闭模型时终止 LAT 管理的 llama-server 并释放显存
 - 提供 OpenAI 兼容接口，可供 nextai-translator 等客户端调用
+
+## 划词翻译
+
+1. 在设置中开启“划词翻译”，在主窗口启用一个已安装的模型。
+2. 在 Chrome/Edge 网页或可选文本 PDF 中选中文字，点击附近的 LAT 浮标；也可按默认 `Ctrl+Alt+T`。快捷键可在设置中录制，冲突时保留原配置并显示错误。
+3. 浮窗默认自动检测原文并译为中文，可切换并记忆目标语言、复制译文、查看 LaTeX、固定窗口或转入主窗口。
+4. 首次启用时同时开启“关闭到托盘”；关闭主窗口会继续保留模型。使用托盘菜单“退出”可结束网关与模型并释放显存。托盘也可暂停划词监听。
+
+划选本身只显示图标，主动触发后才运行本地翻译。UIA 取词失败时，启用“允许复制兜底”可以在主动操作后模拟一次复制；剪贴板格式无法安全保护、无选区或目标不支持时请手动复制并粘贴到浮窗。不会持续监听剪贴板。扫描 PDF/图片需要 OCR，不在本版范围内；管理员权限软件与自绘控件的取词能力受系统及目标程序限制。
+
+浮窗最多直接翻译 5,000 个 Unicode 字符，更长内容可完整转入主窗口。主窗口内容替换前会确认。模型未启用时不会自动加载；主窗口正翻译长文时，浮窗显示排队位置，在通过校验的分段之间获得执行机会。关闭浮窗仅取消它自己的请求。完整成功结果遵守现有历史开关和容量设置，标记为“划词翻译”。
+
+固定浮窗后再次划词会更新原文和译文，并保留你调整后的窗口位置与尺寸；取消固定后恢复跟随新选区定位。
+
+本版修复 beta.8 验收中的搜索焦点裁切和桌面历史导出，重设计架构画布与动画，并默认显示 GPU 看板，详见 [beta.9 发布说明](docs/releases/v0.2.1-beta.9.md) 和 [模型架构浏览设计](docs/design/model-architecture.md)。桌面导出 JSON/Markdown 时弹出原生另存为对话框，成功后明确显示实际路径；浏览器开发模式使用浏览器下载列表。所有版本继续共用一份 [统一验收清单](docs/acceptance/lat-acceptance-checklist.md)，beta.8 的用户勾选和七条原始反馈完整保留在历史附录中。此前的 [第三轮设计](docs/design/history-navigation-round3.md)、[运行时设计](docs/design/runtime-stability.md)、[第二轮性能设计](docs/design/performance-round2.md) 和 [推理看板数据口径](docs/design/inference-dashboard.md) 继续适用。
+
+主窗口的 LaTeX 预览最多排版前 4,000 个 UTF-16 字符、40 个完整公式，遇到未闭合公式时在其前停止，并显示范围提示；“文本”视图、复制及历史始终保留全文。GPU 历史从网关启动持续采集，原生 NVML 不可用时自动使用较低频率的兼容采集，并显示实际周期。
+
+beta.1 的用户验收记录已保留；beta.2 修复浮标首次点击、鼠标延迟与浮窗圆角，对应待复验项已并入 [统一验收清单](docs/acceptance/lat-acceptance-checklist.md)。划词兼容性反馈可查阅该清单中的历史附录，实现方式比较见 [技术设计](docs/design/selection-translation.md)。
+
+历史容量以完整记录 JSON 的 UTF-8 字节数计算，包含原文、提交文本、译文和元数据，不等于 WebView 实际磁盘占用。达到任一上限会按时间删除最旧完整记录；单条超过容量时保留原库并提示保存失败。普通分页只读取短摘要，搜索关键词时按候选逐条扫描全文，导出时读取符合筛选条件的完整记录。升级时在同一事务中为旧记录建立摘要，失败会回滚；首次打开不自动裁剪既有超限记录，下一次成功保存或主动调整上限时再应用双上限，超限页面会提示先导出。失败保存队列只保留在当前窗口内存，关闭软件前应完成重试或另行复制需要保留的译文。
 
 ## 模型选择与推荐
 
@@ -78,10 +105,11 @@ git clone git@github.com:yangzhexian/LAT.git
 Set-Location LAT
 
 Copy-Item translator.config.example.json translator.config.json
+$env:LAT_ADMIN_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 python -m local_translator serve
 ```
 
-网关默认监听 `http://127.0.0.1:8787`。
+网关默认监听 `http://127.0.0.1:8787`。从 beta.5 开始，手动启动必须设置 `LAT_ADMIN_TOKEN` 或本地配置的 `admin_token`；管理命令使用同一密钥。桌面版自动创建仅在本次运行有效的管理密钥，无需手动填写。`GET /health` 公开返回版本、协议版本和实例标识，其他数据及管理接口要求 Bearer 密钥。
 
 ### 运行 Tauri 开发版本
 
@@ -92,11 +120,14 @@ python -m pip install -r requirements-build.txt
 npm run tauri dev
 ```
 
-仅调试前端时可以运行：
+仅调试前端时，在已配置同一管理密钥的终端运行；先另行启动上述网关：
 
 ```powershell
+$env:VITE_GATEWAY_TOKEN = $env:LAT_ADMIN_TOKEN
 npm run dev
 ```
+
+`VITE_GATEWAY_TOKEN` 仅用于本机 Vite 开发，不应写入提交或分发构建。Tauri 主窗口和划词浮窗从原生层获取会话，不把管理密钥写入本地存储。若主动复用手动启动的网关，应从配置了相同 `LAT_ADMIN_TOKEN` 的终端启动 Tauri；推荐使用上述随机生成的密钥。复用网关不归桌面进程所有，退出桌面不会关闭它。
 
 ### 首次使用流程
 
@@ -151,8 +182,21 @@ npm run build:installer
 | `top_k` | `20` | Top-k 采样参数 |
 | `repetition_penalty` | `1.05` | 重复惩罚 |
 | `num_ctx` | `8192` | 上下文长度 |
+| `batch_size` / `ubatch_size` | `2048` / `512` | 输入逻辑批次与物理微批次；`LAT_BATCH_SIZE` / `LAT_UBATCH_SIZE` |
+| `flash_attention` | `auto` | `auto`、`on` 或 `off`；`LAT_FLASH_ATTENTION` |
+| `kv_cache_type` | `f16` | `f16` 或可选 `q8_0`，更改后重启模型；`LAT_KV_CACHE_TYPE` |
+| `cache_prompt` | `true` | 复用模型输入公共前缀缓存；`LAT_CACHE_PROMPT` |
+| `max_pending_translations` | `8` | 一个执行任务之外的等待名额，范围 1–32；`LAT_MAX_PENDING_TRANSLATIONS` |
+| `queue_wait_timeout_seconds` | `120` | 每次等待推理机会的时限，超时保留已完成分段；`LAT_QUEUE_WAIT_TIMEOUT` |
 | `max_output_tokens` | `4096` | 每段最大输出 token 数 |
 | `max_input_chars` | `100000` | 整篇输入字符上限，可用 `LLM_TRANSLATOR_MAX_INPUT_CHARS` 覆盖 |
+| `admin_token` | 空 | 手动网关管理密钥，可用 `LAT_ADMIN_TOKEN` 覆盖；桌面版自动设置 |
+| `api_key` | 空 | 第三方翻译密钥，可用 `LAT_API_KEY` 覆盖；空值不允许第三方密钥访问 |
+| `allowed_origins` | `[]` | 额外允许的明确 Origin，例如实际扩展的 `chrome-extension://<id>`；不支持通配符 |
+| `connect_timeout_seconds` | `3` | 单次模型 HTTP 连接时限；`LAT_CONNECT_TIMEOUT` |
+| `first_response_timeout_seconds` | `120` | 单次模型调用等待首条 SSE 数据的时限；`LAT_FIRST_RESPONSE_TIMEOUT` |
+| `stream_idle_timeout_seconds` | `30` | 已开始响应后连续无数据的时限；`LAT_STREAM_IDLE_TIMEOUT` |
+| `request_timeout_seconds` | `600` | 单次模型调用总时限，包含连接与等待；`LLM_TRANSLATOR_TIMEOUT` |
 
 环境变量优先级高于配置文件：
 
@@ -165,13 +209,17 @@ $env:LLM_TRANSLATOR_PORT = "8787"
 
 ## OpenAI 兼容接口
 
-启动网关并完成模型安装后，在 nextai-translator 的 OpenAI 兼容服务中填写：
+启动网关前设置独立的 `LAT_API_KEY`，或在本地 `translator.config.json` 中配置 `api_key`，再完成模型安装。第三方密钥支持翻译、模型列表和取消自己创建的任务，不能修改数据目录、下载、卸载模型或关闭网关。在 nextai-translator 的 OpenAI 兼容服务中填写：
 
 ```text
 API URL: http://127.0.0.1:8787/v1
-API Key: local
+API Key: 与 LAT_API_KEY / api_key 相同的值
 Model: hy-mt2-7b:q6_k
 ```
+
+旧版任意填写 `local` 的方式不再可用。带有 Origin 的客户端还需使用内置本地来源或配置 `allowed_origins`；没有 Origin 的本地客户端仍需 Bearer 密钥。管理密钥与第三方密钥应使用不同的随机值。
+
+`stream: true` 在每段通过质量与格式校验后增量发送该段译文；不会把尚未校验的模型 token 或提示词直接送给客户端。`stream_options: {"include_usage": true}` 请求最终用量，计数包括实际分段、重试及同一任务的续译调用，重复段缓存不增加调用用量。计数缺失时，非流式响应省略 `usage`，流式最终用量为 `null`，不会用零冒充测量结果。
 
 主要接口：
 
@@ -285,14 +333,16 @@ LAT 以 MIT 许可证发布，详见 [LICENSE](LICENSE)。
 
 ## 长文本事件接口
 
-`POST /translate/stream` 保留原请求字段，新增 `plan`、`segment_complete` 事件。
-`completed_chars / total_chars` 表示已经通过校验的原文比例，`completed_chunks / total_chunks` 表示分段进度；运行时细分可能增加总段数，原文比例不回退。
-`segment_complete.translation` 只包含本段译文；`complete.translation` 包含整篇译文。客户端仅收到 `complete` 后才应视为成功。
-实时速度是估算值，最终指标使用模型计数和包含重试的总耗时。关闭 SSE 连接会清理上游推理连接；预填充阶段的取消可能等待下一次模型输出。
-`GET /admin/status` 新增 `max_input_chars`。现有 `/translate` 和 OpenAI 兼容响应结构保持兼容，共用分段引擎。
+`POST /translate/stream` 和 `POST /translate` 可附加 `require_ready: true`，要求仅使用已启用模型，模型未就绪时返回 `model_not_ready`；省略时保留既有行为。JSON 错误对象增加 `error.code`，SSE 错误事件增加 `code`，可用于区分 `translation_busy`、`model_not_ready` 与其他失败，原状态码和消息字段保留。
+
+`POST /translate/stream` 保留原请求字段，新增 `plan`、`segment_complete` 事件。`completed_chars / total_chars` 表示已经通过校验的原文比例，`completed_chunks / total_chunks` 表示分段进度；运行时细分可能增加总段数，原文比例不回退。`segment_complete.translation` 只包含本段译文；`complete.translation` 包含整篇译文。客户端仅收到 `complete` 后才应视为成功。
+
+实时速度是估算值，最终指标使用模型计数和包含重试的总耗时。关闭 SSE 或普通 JSON 翻译连接都会取消对应任务并关闭上游模型连接；等待响应头或首条输出期间也可取消，无需等待下一条 token。连接、首响应、流空闲和单次调用总时限分别受控，实际显存回收与取消延迟需在本机模型上验收。
+
+`GET /admin/status` 返回 `max_input_chars`、`lifecycle`、`lifecycle_error` 和 `runtime_instance_id`。翻译中不允许加载、切换或卸载模型以及修改数据目录，管理冲突返回 HTTP 409 / `model_busy`。`/translate` 和 OpenAI 兼容接口共用分段引擎，均需要上述鉴权；客户端须与协议版本 2 的网关配套。
 
 历史保存在当前 WebView 的 `lat.history` 数据库中，不随模型目录迁移，也不进行云同步。开发浏览器和安装版使用各自的本地存储。
 
 前端逻辑回归测试：`npm run test:frontend`。
 
-本轮本地验收说明和人工检查项见 [毛玻璃与长文本验收清单](docs/acceptance/lat-ui-longtext-checklist.md)。
+人工检查统一使用 [LAT 验收清单](docs/acceptance/lat-acceptance-checklist.md)。其中当前版本项目由用户填写，历史附录原样保留此前六份清单的勾选与反馈；开发自动测试不代替人工验收。

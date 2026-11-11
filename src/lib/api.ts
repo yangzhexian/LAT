@@ -2,6 +2,9 @@ import type {
   DownloadEnvironment,
   DownloadEvent,
   LocalStatus,
+  ModelArchitecture,
+  InferenceSnapshot,
+  TelemetrySnapshot,
   StreamEvent,
   TranslationRequest,
 } from "../types";
@@ -13,7 +16,15 @@ const GATEWAY_URL = (
 interface ErrorResponse {
   error?: {
     message?: string;
+    code?: string;
   };
+}
+
+export class GatewayError extends Error {
+  constructor(message: string, public readonly code?: string) {
+    super(message);
+    this.name = "GatewayError";
+  }
 }
 
 function isTauri(): boolean {
@@ -25,13 +36,44 @@ async function invokeTauri<T>(command: string): Promise<T> {
   return invoke<T>(command);
 }
 
+interface GatewaySession { url: string; token: string; instance_id: string; protocol_version: number; owned: boolean }
+let gatewaySession: GatewaySession | null = null;
+let pendingSession: Promise<GatewaySession> | null = null;
+let sessionGeneration = 0;
+let architectureCache: { etag: string | null; value: ModelArchitecture | null } | null = null;
+
+export function invalidateGatewaySession(): void { sessionGeneration++; gatewaySession = null; pendingSession = null; architectureCache = null; }
+
+async function gatewayFetch(path: string, init?: RequestInit): Promise<Response> {
+  let base = GATEWAY_URL;
+  let token = import.meta.env.DEV ? import.meta.env.VITE_GATEWAY_TOKEN || "" : "";
+  if (isTauri()) {
+    if (!gatewaySession) {
+      const generation = sessionGeneration;
+      const pending = pendingSession ??= invokeTauri<GatewaySession>("gateway_session");
+      try {
+        const session = await pending;
+        if (generation !== sessionGeneration) throw new GatewayError("网关会话已失效，请重试", "session_changed");
+        gatewaySession = session;
+      } finally { if (pendingSession === pending) pendingSession = null; }
+    }
+    base = gatewaySession.url;
+    token = gatewaySession.token;
+  }
+  const headers = new Headers(init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(base + path, { ...init, headers });
+  if (response.status === 401 && isTauri()) invalidateGatewaySession();
+  return response;
+}
+
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const body = (await response.json().catch(() => ({}))) as ErrorResponse;
-  return new Error(body.error?.message || fallback + " (" + response.status + ")");
+  return new GatewayError(body.error?.message || fallback + " (" + response.status + ")", body.error?.code);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(GATEWAY_URL + path, init);
+  const response = await gatewayFetch(path, init);
   if (!response.ok) {
     throw await responseError(response, "请求失败");
   }
@@ -85,15 +127,22 @@ async function readEventStream<T>(
 
 export async function ensureGateway(): Promise<void> {
   if (isTauri()) {
-    await invokeTauri("start_gateway");
+    gatewaySession = await invokeTauri<GatewaySession>("start_gateway");
   }
   const deadline = Date.now() + 30_000;
   let lastError = "翻译网关未响应";
   while (Date.now() < deadline) {
     try {
-      await request<{ status: string }>("/health");
+      const health = await request<{ service: string; protocol_version: number; instance_id: string }>("/health", { signal: AbortSignal.timeout(2000) });
+      if (health.service !== "lat-local-translator" || health.protocol_version !== 2) {
+        throw new GatewayError("网关协议不兼容，请退出旧版网关后重试", "protocol_mismatch");
+      }
+      if (gatewaySession && health.instance_id !== gatewaySession.instance_id) {
+        throw new GatewayError("网关实例已变化，请退出占用端口的其他网关后重试", "instance_mismatch");
+      }
       return;
     } catch (error) {
+      if (error instanceof GatewayError && error.code?.endsWith("mismatch")) throw error;
       lastError = error instanceof Error ? error.message : String(error);
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
@@ -101,8 +150,8 @@ export async function ensureGateway(): Promise<void> {
   throw new Error(lastError);
 }
 
-export function getStatus(): Promise<LocalStatus> {
-  return request<LocalStatus>("/admin/status");
+export function getStatus(signal?: AbortSignal): Promise<LocalStatus> {
+  return request<LocalStatus>("/admin/status", { signal });
 }
 
 export function getDownloadEnvironment(model?: string): Promise<DownloadEnvironment> {
@@ -153,7 +202,7 @@ export async function downloadModelStream(
   model: string,
   onEvent: (event: DownloadEvent) => void,
 ): Promise<"completed" | "cancelled"> {
-  const response = await fetch(GATEWAY_URL + "/admin/download", {
+  const response = await gatewayFetch("/admin/download", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -205,7 +254,7 @@ export async function translateStream(
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(GATEWAY_URL + "/translate/stream", {
+  const response = await gatewayFetch("/translate/stream", {
     signal,
     method: "POST",
     headers: {
@@ -219,17 +268,43 @@ export async function translateStream(
   }
   let completed = false;
   let streamError = "";
+  let streamCode: string | undefined;
   await readEventStream<StreamEvent>(response, (event) => {
     if (event.type === "complete" || event.type === "cancelled") completed = true;
-    if (event.type === "error") streamError = event.message || "翻译失败";
+    if (event.type === "error") { streamError = event.message || "翻译失败"; streamCode = event.code; }
     onEvent(event);
   });
-  if (streamError) throw new Error(streamError);
+  if (streamError) throw new GatewayError(streamError, streamCode);
   if (!completed) throw new Error("翻译流提前结束，未收到完成确认");
 }
 
 export function getTelemetry(signal?: AbortSignal): Promise<import("../types").TelemetrySnapshot> {
   return request("/admin/telemetry", { signal });
+}
+
+export function getGpuTelemetry(signal?: AbortSignal, cursor?: number | null, sessionId?: string): Promise<TelemetrySnapshot> {
+  const query = new URLSearchParams();
+  if (cursor != null) query.set("since", String(cursor));
+  if (sessionId) query.set("session_id", sessionId);
+  return request("/admin/telemetry/gpu" + (query.size ? `?${query}` : ""), { signal });
+}
+
+export function getInferenceTelemetry(signal?: AbortSignal): Promise<InferenceSnapshot> {
+  return request("/admin/telemetry/inference", { signal });
+}
+
+export async function getModelArchitecture(signal?: AbortSignal): Promise<ModelArchitecture | null> {
+  const generation = sessionGeneration;
+  const cached = architectureCache;
+  const headers = cached?.etag ? { "If-None-Match": cached.etag } : undefined;
+  const response = await gatewayFetch("/admin/architecture", { signal, headers });
+  if (generation !== sessionGeneration || signal?.aborted) throw new GatewayError("架构请求已失效", "session_changed");
+  if (response.status === 304 && cached) return cached.value;
+  if (!response.ok) throw await responseError(response, "读取模型架构失败");
+  const body = await response.json() as { architecture?: ModelArchitecture };
+  if (generation !== sessionGeneration || signal?.aborted) throw new GatewayError("架构请求已失效", "session_changed");
+  architectureCache = { etag: response.headers.get("ETag"), value: body.architecture ?? null };
+  return architectureCache.value;
 }
 
 export function setTelemetryInterval(interval: number, signal?: AbortSignal): Promise<unknown> {

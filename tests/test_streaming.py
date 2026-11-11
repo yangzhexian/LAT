@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import Mock
 
 from local_translator.config import Settings
-from local_translator.engine import TranslationEngine
+from local_translator.engine import TranslationEngine, TranslationRequestError, TranslationOutputError
+from local_translator.errors import ModelNotReadyError
 
 
 class FakeLlamaClient:
@@ -25,11 +27,89 @@ class FakeManager:
     def __init__(self):
         self.client = FakeLlamaClient()
 
-    def ensure_server(self):
+    def ensure_server(self, **_kwargs):
         return self.client
 
 
 class StreamingTests(unittest.TestCase):
+    def test_queued_request_does_not_cancel_or_replace_active_job(self):
+        engine = TranslationEngine(Settings(), FakeManager())
+        active = engine.translate_stream({"text": "你好", "target_language": "English"})
+        plan = next(active)
+        job = engine._active_job
+        queued = engine.translate_stream({"text": "另一条原文", "target_language": "English"})
+        try:
+            waiting = next(queued)
+            self.assertEqual(waiting["type"], "waiting")
+            self.assertEqual(waiting["queue_position"], 1)
+            self.assertIs(engine._active_job, job)
+            self.assertFalse(job.cancel.is_set())
+            self.assertIn(plan["job_id"], engine._jobs)
+            queued.close()
+            self.assertEqual(list(active)[-1]["translation"], "Hello world.")
+        finally:
+            queued.close()
+            active.close()
+
+    def test_cancel_id_is_isolated_from_active_job(self):
+        engine = TranslationEngine(Settings(), FakeManager())
+        other = engine._get_job({"text": "先前的原文", "target_language": "English"})
+        active = engine.translate_stream({"text": "你好", "target_language": "English"})
+        plan = next(active)
+        try:
+            engine.cancel_translation(other.id)
+            self.assertTrue(other.cancel.is_set())
+            self.assertFalse(engine._jobs[plan["job_id"]].cancel.is_set())
+            with self.assertRaises(TranslationRequestError) as raised:
+                engine.cancel_translation("unknown-id")
+            self.assertEqual(raised.exception.code, "checkpoint_expired")
+            self.assertFalse(engine._jobs[plan["job_id"]].cancel.is_set())
+            self.assertEqual(list(active)[-1]["type"], "complete")
+        finally:
+            active.close()
+
+    def test_ready_only_request_does_not_auto_start_model(self):
+        manager = FakeManager()
+        manager.require_ready_server = Mock(side_effect=ModelNotReadyError("not enabled"))
+        manager.ensure_server = Mock()
+        engine = TranslationEngine(Settings(), manager)
+        with self.assertRaises(ModelNotReadyError) as raised:
+            list(engine.translate_stream({"text": "$x$", "require_ready": True}))
+        self.assertEqual(raised.exception.code, "model_not_ready")
+        manager.ensure_server.assert_not_called()
+        self.assertEqual(engine._jobs, {})
+        self.assertFalse(engine._translation_lock.locked())
+
+    def test_unloaded_model_after_plan_is_not_restarted(self):
+        manager = FakeManager()
+        manager.require_ready_server = Mock(side_effect=[manager.client, ModelNotReadyError("not enabled")])
+        manager.ensure_server = Mock()
+        engine = TranslationEngine(Settings(), manager)
+        active = engine.translate_stream({"text": "你好", "target_language": "English", "require_ready": True})
+        self.assertEqual(next(active)["type"], "plan")
+        with self.assertRaises(TranslationOutputError) as raised:
+            list(active)
+        self.assertEqual(raised.exception.code, "model_not_ready")
+        manager.ensure_server.assert_not_called()
+
+    def test_ready_only_success_and_legacy_auto_start(self):
+        manager = FakeManager()
+        manager.require_ready_server = Mock(return_value=manager.client)
+        manager.ensure_server = Mock(return_value=manager.client)
+        engine = TranslationEngine(Settings(), manager)
+        result = engine.translate({"text": "你好", "target_language": "English", "require_ready": True})
+        self.assertEqual(result.text, "Hello world.")
+        manager.ensure_server.assert_not_called()
+        result = engine.translate({"text": "你好", "target_language": "English"})
+        self.assertEqual(result.text, "Hello world.")
+        manager.ensure_server.assert_called_once()
+
+    def test_require_ready_rejects_non_boolean(self):
+        engine = TranslationEngine(Settings(), FakeManager())
+        with self.assertRaises(TranslationRequestError) as raised:
+            list(engine.translate_stream({"text": "你好", "require_ready": "false"}))
+        self.assertEqual(raised.exception.code, "invalid_request")
+
     def test_prompt_leak_is_retried_before_display(self):
         manager = FakeManager()
         calls = []

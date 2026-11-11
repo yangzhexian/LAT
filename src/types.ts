@@ -7,12 +7,19 @@ export interface UserSettings {
   layout: LayoutMode;
   reduceMotion: boolean;
   historyLimit: number;
+  historyStorageMiB?: number;
   saveHistory: boolean;
   telemetryInterval: number;
   telemetryWindow: number;
   autoFont: boolean;
   removeLineBreaks: boolean;
   dataDirectory: string;
+  selectionEnabled: boolean;
+  selectionShortcut: string;
+  selectionClipboardFallback: boolean;
+  selectionCloseToTray: boolean;
+  selectionTargetLanguage: string;
+  selectionOnboarded: boolean;
 }
 
 export interface ModelDetails {
@@ -48,6 +55,9 @@ export interface InstalledModelStatus {
 }
 
 export interface LocalStatus {
+  lifecycle?: "unloaded" | "loading" | "ready" | "unloading" | "failed";
+  lifecycle_error?: string | null;
+  runtime_instance_id?: string | null;
   max_input_chars?: number;
   backend: "llama.cpp";
   ready: boolean;
@@ -137,6 +147,8 @@ export interface TranslationMetrics {
 }
 
 export interface TranslationRequest {
+  request_source?: "workspace" | "selection";
+  require_ready?: boolean;
   job_id?: string;
   text: string;
   source_language: string;
@@ -145,6 +157,9 @@ export interface TranslationRequest {
 }
 
 export interface StreamEvent {
+  request_source?: "workspace" | "selection" | "api";
+  queue_position?: number;
+  code?: string;
   job_id?: string;
   type: "waiting" | "cancelled" | "plan" | "segment_complete" | "attempt" | "progress" | "retry" | "complete" | "error";
   chunk_index?: number;
@@ -177,12 +192,87 @@ export interface GpuSample {
   temperature_c: number | null;
 }
 export interface TelemetrySample {
+  provider?: "nvml" | "nvidia-smi" | null;
+  provider_status?: "starting" | "ok" | "partial" | "fallback" | "unavailable";
+  provider_message?: string;
+  provider_interval?: number | null;
   timestamp: number;
   gpus: GpuSample[];
   message: string;
 }
 
 export interface TelemetrySnapshot extends TelemetrySample {
+  session_id?: string;
+  cursor?: number | null;
+  reset?: boolean;
   samples: TelemetrySample[];
   interval: number;
+  inference?: InferenceSnapshot;
+}
+
+export interface InferenceRecord {
+  id: string;
+  model: string;
+  job_id: string | null;
+  segment_index: number | null; // 1-based index within the translation job.
+  attempt: number;
+  status: "running" | "completed" | "cancelled" | "failed";
+  phase: "prefill" | "decode" | "idle";
+  started_at: number;
+  finished_at: number | null;
+  elapsed_ms: number;
+  first_token_ms: number | null;
+  prompt_tokens: number | null;
+  generated_tokens: number | null;
+  total_tokens: number | null;
+  tokens_complete: boolean;
+  tokens_per_second: number | null;
+  prompt_tokens_per_second: number | null;
+  prompt_ms: number | null;
+  decode_ms: number | null;
+  output_chars: number;
+  token_source: "llama.cpp" | "unknown";
+  speed_source: "llama.cpp" | "wall_clock" | "unknown";
+}
+
+export interface ModelArchitecture {
+  available: boolean;
+  source: "gguf" | "unavailable";
+  model: string;
+  architecture: string | null;
+  name: string | null;
+  block_count: number | null;
+  embedding_length: number | null;
+  attention_heads: number | null;
+  kv_heads: number | null;
+  feed_forward_length: number | null;
+  context_length: number | null;
+  expert_count: number | null;
+  expert_used_count: number | null;
+  tensor_count: number | null;
+  parameter_count: number | null;
+  quantization: string | null;
+  vocab_size?: number | null;
+  head_dim?: number | null;
+  block_tensors?: { layer: number; name: string; shape: number[]; elements: number | null }[];
+  block_tensors_truncated?: boolean;
+  message: string;
+}
+
+export interface InferenceSnapshot {
+  session_started_at: number;
+  summary: {
+    calls: number;
+    completed_calls: number;
+    cancelled_calls: number;
+    failed_calls: number;
+    prompt_tokens: number;
+    generated_tokens: number;
+    total_tokens: number;
+    unknown_token_calls: number;
+  };
+  active: InferenceRecord | null;
+  latest: InferenceRecord | null;
+  history: InferenceRecord[];
+  architecture?: ModelArchitecture;
 }

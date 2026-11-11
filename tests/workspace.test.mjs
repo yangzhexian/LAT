@@ -2,9 +2,181 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { JSDOM } from 'jsdom';
 import 'fake-indexeddb/auto';
+
+async function bundleWorkspace(outfile, mockHistory = false) {
+  await build({
+    entryPoints: ['src/features/translator/TranslatorWorkspace.tsx'], outfile, bundle: true, platform: 'node',
+    format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined', 'import.meta.env.DEV': 'false' },
+    plugins: [{
+      name: 'workspace-model-page-fixtures',
+      setup(builder) {
+        if (mockHistory) {
+          builder.onResolve({ filter: /\/lib\/history$/ }, () => ({ path: 'history', namespace: 'history-failure-fixture' }));
+          builder.onLoad({ filter: /.*/, namespace: 'history-failure-fixture' }, () => ({ loader: 'js', contents: `export const updateHistory = (...args) => globalThis.workspaceHistoryFixture.updateHistory(...args); export const getHistoryStats = async () => globalThis.workspaceHistoryFixture.getHistoryStats?.() || ({ count: 0, bytes: 0, models: [] }); export const readHistoryPage = async (options) => globalThis.workspaceHistoryFixture.readHistoryPage?.(options) || ({ items: [], nextCursor: null }); export const getHistoryRecord = async () => undefined; export const exportHistory = async () => [];` }));
+        }
+        builder.onResolve({ filter: /^better-react-mathjax$/ }, () => ({ path: 'mathjax', namespace: 'mathjax-fixture' }));
+        builder.onLoad({ filter: /.*/, namespace: 'mathjax-fixture' }, () => ({
+          loader: 'tsx', resolveDir: resolve('.'), contents: `import { createContext } from "react"; export const MathJaxBaseContext = createContext(undefined); export function MathJax({ children }) {
+            globalThis.workspaceMathRenders?.push(children);
+            return <div data-math-preview>{children}</div>;
+          }`,
+        }));
+        builder.onResolve({ filter: /\/(ModelArchitecturePage|ModelDashboard)$/ }, ({ path }) => ({ path: path.split('/').at(-1), namespace: 'model-page-fixture' }));
+        builder.onLoad({ filter: /.*/, namespace: 'model-page-fixture' }, ({ path }) => ({
+          loader: 'tsx', resolveDir: resolve('.'), contents: `export function ${path}({ interval, reduceMotion }) {
+            return <div data-model-page="${path}" data-interval={interval} data-reduce-motion={String(reduceMotion)}>Local model page</div>;
+          }`,
+        }));
+      },
+    }],
+  });
+  return import(pathToFileURL(resolve(outfile)).href);
+}
+
+test('failed history save retains full successful result and retries the same record with configured capacity', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  const attempts = [];
+  let fail = true;
+  globalThis.workspaceHistoryFixture = { async updateHistory(action, limit, maxBytes) {
+    if (action.add) { attempts.push({ action, limit, maxBytes }); if (fail) throw new Error('QuotaExceededError'); }
+  } };
+  const originalFetch = globalThis.fetch;
+  const fullSource = 'source'.repeat(16000);
+  const fullTranslation = '译文'.repeat(45000);
+  globalThis.fetch = async () => new Response('data: ' + JSON.stringify({ type: 'complete', job_id: 'save-retry-id', translation: fullTranslation, model: 'test-model' }) + '\n\n');
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-save-failure-test.mjs', true);
+  const root = createRoot(document.getElementById('root'));
+  try {
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, {
+      status: { ready: true, model_configured: 'test-model', max_input_chars: 100000 },
+      settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, historyLimit: 100, historyStorageMiB: 32 },
+      selectionTransfer: { id: 100, text: fullSource }, onSettingsChange() {}, onDisable() {},
+    })));
+    await React.act(async () => document.querySelector('.translate-button').click());
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSource);
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullTranslation);
+    assert.match(document.querySelector('.workspace-status').textContent, /未能保存/);
+    assert.equal(attempts.length, 1);
+    fail = false;
+    await React.act(async () => [...document.querySelectorAll('button')].find((button) => button.textContent === '重试保存历史').click());
+    assert.equal(attempts.length, 2);
+    assert.deepEqual(attempts[1], attempts[0]);
+    assert.equal(attempts[1].maxBytes, 32 * 1048576);
+    assert.equal(attempts[1].limit, 100);
+    assert.equal(attempts[1].action.add.translation, fullTranslation);
+    assert.match(document.querySelector('.workspace-status').textContent, /已保存到本机/);
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullTranslation);
+  } finally {
+    await React.act(async () => root.unmount()); globalThis.fetch = originalFetch;
+    delete globalThis.workspaceHistoryFixture; dom.window.close();
+  }
+});
+
+test('concurrent preference changes apply the latest history count and byte limits after an active trim', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  const trims = [];
+  let releaseFirst;
+  globalThis.workspaceHistoryFixture = { async updateHistory(action, limit, maxBytes) {
+    trims.push({ action, limit, maxBytes });
+    if (trims.length === 1) await new Promise((resolve) => { releaseFirst = resolve; });
+  } };
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-trim-race-test.mjs', true);
+  const root = createRoot(document.getElementById('root'));
+  const props = { status: { ready: true, model_configured: 'test-model' }, settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, historyLimit: 200, historyStorageMiB: 128 }, onSettingsChange() {}, onDisable() {} };
+  try {
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, props)));
+    assert.equal(trims.length, 0, 'mount does not apply the new retention policy to existing history');
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, settings: { ...props.settings, historyLimit: 100, historyStorageMiB: 64 } })));
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, settings: { ...props.settings, historyLimit: 10, historyStorageMiB: 16 } })));
+    assert.equal(trims.length, 1, 'pending preference changes do not start competing trims');
+    await React.act(async () => releaseFirst());
+    assert.equal(trims.length, 2);
+    assert.equal(trims[1].limit, 10);
+    assert.equal(trims[1].maxBytes, 16 * 1048576);
+  } finally { await React.act(async () => root.unmount()); delete globalThis.workspaceHistoryFixture; dom.window.close(); }
+});
+
+test('a failed record remains retryable after the next translation succeeds or also fails', async () => {
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-save-queue-test.mjs', true);
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const originalFetch = globalThis.fetch;
+  for (const failSecond of [false, true]) {
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+    Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+    const attempts = [];
+    const saved = [];
+    let retrying = false;
+    let sequence = 0;
+    const fullSource = 'source'.repeat(10000);
+    const outputs = ['A' + '译'.repeat(80000), 'B' + '译'.repeat(80000)];
+    globalThis.workspaceHistoryFixture = { async updateHistory(action) {
+      if (!action.add) return;
+      attempts.push(action.add.id);
+      if (!retrying && (action.add.id === 'A' || failSecond)) throw new Error('QuotaExceededError');
+      saved.push(action.add);
+    } };
+    globalThis.fetch = async () => { const index = sequence++; return new Response('data: ' + JSON.stringify({ type: 'complete', job_id: index === 0 ? 'A' : 'B', translation: outputs[index], model: 'test-model' }) + '\n\n'); };
+    const root = createRoot(document.getElementById('root'));
+    try {
+      await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { status: { ready: true, model_configured: 'test-model' }, settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false }, selectionTransfer: { id: 1, text: fullSource }, onSettingsChange() {}, onDisable() {} })));
+      await React.act(async () => document.querySelector('.translate-button').click());
+      await React.act(async () => document.querySelector('.translate-button').click());
+      assert.deepEqual(attempts, ['A', 'B']);
+      assert.match(document.querySelector('.translation-page .ui-notice').textContent, new RegExp(`有 ${failSecond ? 2 : 1} 条完整翻译待保存`));
+      retrying = true;
+      const retry = async () => React.act(async () => [...document.querySelectorAll('button')].find((button) => button.textContent === '重试保存历史').click());
+      await retry();
+      assert.deepEqual(attempts, ['A', 'B', 'A']);
+      assert.equal(saved.find((row) => row.id === 'A').source, fullSource);
+      assert.equal(saved.find((row) => row.id === 'A').translation, outputs[0]);
+      assert.equal(document.querySelector('textarea[aria-label="译文"]').value, outputs[1], 'retry does not replace the latest workspace result');
+      if (failSecond) {
+        assert.match(document.querySelector('.translation-page .ui-notice').textContent, /有 1 条完整翻译待保存/);
+        await retry();
+        assert.equal(saved.find((row) => row.id === 'B').translation, outputs[1]);
+      }
+      assert.equal(document.querySelector('.translation-page .ui-notice'), null);
+    } finally { await React.act(async () => root.unmount()); dom.window.close(); }
+  }
+  globalThis.fetch = originalFetch; delete globalThis.workspaceHistoryFixture;
+});
+
+test('startup preserves 200 existing long records above the new default capacity and explains deferred eviction', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  const rows = Array.from({ length: 200 }, (_, index) => ({ id: String(index), createdAt: index, source: '原'.repeat(100000), submittedText: '原'.repeat(100000), translation: '译'.repeat(100000), sourceLanguage: 'zh', targetLanguage: 'en', model: 'legacy-model' }));
+  let mutations = 0;
+  globalThis.workspaceHistoryFixture = {
+    async updateHistory() { mutations++; rows.splice(30); },
+    async getHistoryStats() { return { count: rows.length, bytes: rows.length * 900000, models: ['legacy-model'] }; },
+    async readHistoryPage() { return { items: rows.slice(0, 20).map(({ source, translation, submittedText, ...row }) => ({ ...row, sourcePreview: source.slice(0, 180), translationPreview: translation.slice(0, 180), bytes: 900000 })), nextCursor: null }; },
+  };
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-existing-history-test.mjs', true);
+  const root = createRoot(document.getElementById('root'));
+  try {
+    await React.act(async () => root.render(React.createElement(React.StrictMode, null, React.createElement(TranslatorWorkspace, { status: { ready: true, model_configured: 'test-model' }, settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, historyLimit: 200 }, onSettingsChange() {}, onDisable() {} }))));
+    await React.act(async () => document.querySelector('.side-nav [aria-label="历史记录"]').click());
+    assert.equal(mutations, 0);
+    assert.equal(rows.length, 200);
+    assert.equal(rows[199].translation.length, 100000);
+    assert.equal(document.querySelectorAll('.history-card').length, 20);
+    assert.match(document.querySelector('.history-description').textContent, /共 200 条.*64 MiB/);
+    assert.match(document.querySelector('.history-page .ui-notice').textContent, /下次保存成功或调整上限.*淘汰最旧记录/);
+  } finally { await React.act(async () => root.unmount()); delete globalThis.workspaceHistoryFixture; dom.window.close(); }
+});
 
 test('workspace retains text across navigation, disables conflicts while translating, and shows completed sections', async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost' });
@@ -15,8 +187,7 @@ test('workspace retains text across navigation, disables conflicts while transla
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
   const React = await import('react');
   const { createRoot } = await import('react-dom/client');
-  await build({ entryPoints: ['src/features/translator/TranslatorWorkspace.tsx'], outfile: 'artifacts/validation/workspace-test.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', define: { 'import.meta.env.VITE_GATEWAY_URL': 'undefined' } });
-  const { TranslatorWorkspace } = await import(pathToFileURL(resolve('artifacts/validation/workspace-test.mjs')).href);
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-test.mjs');
   const root = createRoot(document.getElementById('root'));
   let disabled = 0;
   const props = { status: { ready: true, model_configured: 'test-model', backend: 'llama.cpp' }, settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, dataDirectory: '' }, onSettingsChange() {}, onDisable() { disabled++; } };
@@ -57,9 +228,13 @@ test('workspace retains text across navigation, disables conflicts while transla
     await React.act(async () => { streamController.close(); await new Promise((resolve) => setTimeout(resolve, 50)); });
     assert.equal(document.querySelector('.danger-button').disabled, false);
     await click('[aria-label="历史记录"]');
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
     assert.equal(document.querySelectorAll('.history-card').length, 1);
     assert.equal(document.querySelector('.header-action .danger-button').textContent, '清空历史');
     assert.equal([...document.querySelectorAll('h2')].filter((item) => item.textContent === '翻译历史').length, 0);
+    assert.equal(document.querySelectorAll('.history-comparison > section').length, 0);
+    await click('.history-expand');
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     assert.equal(document.querySelectorAll('.history-comparison > section').length, 2);
     await click('[aria-label="翻译"]');
     await click('.translate-button');
@@ -84,13 +259,222 @@ test('workspace retains text across navigation, disables conflicts while transla
     await React.act(async () => { streamController.close(); await new Promise((resolve) => setTimeout(resolve, 20)); });
     assert.match(document.querySelector('.translate-button').textContent, /继续翻译/);
     await click('[aria-label="历史记录"]');
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
     assert.equal(document.querySelectorAll('.history-card').length, 1);
     await click('.history-actions .secondary-button');
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, status: { ...props.status, ready: false } })));
     await click('[aria-label="翻译"]');
     assert.equal(document.querySelector('textarea[aria-label="原文"]').value, 'Hello world.');
     assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '你好，世界。');
     assert.equal(document.querySelector('.translate-button').disabled, true);
     assert.equal(disabled, 0);
+    window.confirm = () => false;
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, selectionTransfer: { id: 1, text: 'Do not overwrite' } })));
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, 'Hello world.');
+    window.confirm = () => true;
+    const fullSelection = 'A'.repeat(16001);
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, settings: { ...props.settings, selectionTargetLanguage: 'zh' }, selectionTransfer: { id: 2, text: fullSelection } })));
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSelection, 'transfer preserves all text');
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '');
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, selectionTransfer: { id: 3 } })));
+    assert.ok(document.querySelector('.model-page'), 'no-text transfer opens model panel');
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSelection);
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, { ...props, selectionBusy: true })));
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, true);
   } finally { await React.act(async () => root.unmount()); globalThis.fetch = originalFetch; dom.window.close(); }
+});
+
+test('architecture navigation works with the model off and long model pages use document scrolling', async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  const style = document.createElement('style');
+  style.textContent = await readFile('src/styles.css', 'utf8');
+  document.head.append(style);
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-navigation-test.mjs');
+  const root = createRoot(document.getElementById('root'));
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => { requests.push(url); throw new Error('navigation must not start a model'); };
+  let disabled = 0;
+  const props = {
+    status: { ready: false, model_configured: 'local-model', backend: 'llama.cpp' },
+    settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, dataDirectory: '', telemetryInterval: 5, reduceMotion: true },
+    setupContent: React.createElement('div', { 'data-model-setup': true }, 'Model setup'),
+    onSettingsChange() {}, onDisable() { disabled++; },
+  };
+  const click = async (label) => React.act(async () => document.querySelector(`.side-nav [aria-label="${label}"]`).click());
+  const assertDocumentLayout = (page) => {
+    const screen = dom.window.getComputedStyle(document.querySelector('.translator-screen'));
+    const content = dom.window.getComputedStyle(document.querySelector(`.${page}-page`));
+    assert.equal(screen.height, 'auto');
+    assert.equal(parseFloat(screen.minHeight), dom.window.innerHeight);
+    assert.equal(content.overflow, 'visible', 'model content must grow instead of scrolling inside a constrained container');
+  };
+  try {
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, props)));
+    assert.ok(document.querySelector('[data-model-setup]'));
+    assertDocumentLayout('model');
+    await click('模型架构');
+    assert.equal(document.querySelector('.translator-screen').dataset.page, 'architecture');
+    assert.equal(document.querySelector('.side-nav [aria-label="模型架构"]').getAttribute('aria-current'), 'page');
+    assert.match(document.querySelector('.brand').textContent, /^模型架构/);
+    const architecture = document.querySelector('[data-model-page="ModelArchitecturePage"]');
+    assert.equal(architecture.dataset.interval, '5');
+    assert.equal(architecture.dataset.reduceMotion, 'true');
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, true);
+    assertDocumentLayout('architecture');
+    const readyProps = { ...props, status: { ...props.status, ready: true } };
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, readyProps)));
+    assert.equal(document.querySelector('.translator-screen').dataset.page, 'architecture', 'model readiness must not interrupt architecture browsing');
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, false);
+    await click('翻译');
+    const source = document.querySelector('textarea[aria-label="原文"]');
+    await React.act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set.call(source, 'Keep this source through navigation.');
+      source.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+    assert.equal(parseFloat(dom.window.getComputedStyle(document.querySelector('.translator-screen')).height), dom.window.innerHeight);
+    assert.equal(dom.window.getComputedStyle(source).overflow, 'auto', 'long input keeps its local scroll');
+    await click('模型架构');
+    await click('模型');
+    assert.ok(document.querySelector('[data-model-page="ModelDashboard"]'));
+    assert.equal(document.querySelector('[data-model-setup]'), null);
+    assertDocumentLayout('model');
+    await click('历史记录');
+    assert.equal(dom.window.getComputedStyle(document.querySelector('.history-page')).overflow, 'auto');
+    await click('设置');
+    assert.equal(dom.window.getComputedStyle(document.querySelector('.settings-page')).overflow, 'auto');
+    await click('翻译');
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, 'Keep this source through navigation.');
+    await click('模型架构');
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, props)));
+    assert.equal(document.querySelector('.translator-screen').dataset.page, 'architecture');
+    assert.equal(document.querySelector('.header-action .danger-button').disabled, true);
+    await click('模型');
+    assert.ok(document.querySelector('[data-model-setup]'));
+    assert.deepEqual(requests, []);
+    assert.equal(disabled, 0);
+  } finally {
+    await React.act(async () => root.unmount());
+    globalThis.fetch = originalFetch;
+    dom.window.close();
+  }
+});
+
+test('100k workspace retains full text, queues with selection, batches progress, and mounts bounded preview only when visible', async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost' });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true, workspaceMathRenders: [] });
+  const React = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { TranslatorWorkspace } = await bundleWorkspace('artifacts/validation/workspace-longtext-test.mjs');
+  const root = createRoot(document.getElementById('root'));
+  const fullSource = '文😀'.repeat(50000);
+  const fullOutput = '$x+y$ translated '.repeat(8000);
+  const props = {
+    status: { ready: true, model_configured: 'longtext-test-model', backend: 'llama.cpp', max_input_chars: 100000 },
+    settings: { theme: 'light', layout: 'horizontal', autoFont: true, removeLineBreaks: false, dataDirectory: '', saveHistory: true, historyLimit: 30 },
+    selectionTransfer: { id: 100, text: fullSource }, selectionBusy: true,
+    onSettingsChange() {}, onDisable() {},
+  };
+  const originalFetch = globalThis.fetch;
+  let streamController;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    if (url.endsWith('/translate/cancel')) return Response.json({ status: 'cancelling' });
+    return new Response(new ReadableStream({ start(controller) { streamController = controller; init.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true }); } }));
+  };
+  const click = async (selector) => React.act(async () => document.querySelector(selector).click());
+  const emit = async (...events) => React.act(async () => {
+    streamController.enqueue(new TextEncoder().encode(events.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('')));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+  try {
+    await React.act(async () => root.render(React.createElement(TranslatorWorkspace, props)));
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSource);
+    assert.match(document.querySelector('.progress-copy').textContent, /100,000 \/ 100,000/);
+    assert.equal(document.querySelector('.translate-button').disabled, false, 'selection can run while a workspace job queues');
+    assert.equal(document.querySelector('[aria-label="交换语言和内容"]').disabled, true);
+    assert.equal(workspaceMathRenders.length, 0, 'text editing never mounts MathJax');
+    await click('.text-pane:first-child .pane-actions button:last-child');
+    assert.ok(workspaceMathRenders.at(-1).length <= 4000);
+    assert.match(document.querySelector('[role="note"]').textContent, /完整内容保留/);
+    await click('.translate-button');
+    assert.equal(requests[0].body.text, fullSource);
+    assert.equal(requests[0].body.request_source, 'workspace');
+    await emit({ type: 'waiting', job_id: 'longtext-job', queue_position: 2 });
+    assert.match(document.querySelector('.workspace-status').textContent, /排队位置 2/);
+    await React.act(async () => {
+      [...document.querySelectorAll('button')].find((button) => button.textContent === '取消翻译').click();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    assert.equal(requests.at(-1).url.endsWith('/translate/cancel'), true, 'waiting before the first plan has an explicit cancellation identity');
+    assert.equal(requests.at(-1).body.job_id, 'longtext-job');
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/);
+    await click('.translate-button');
+    assert.equal(requests.at(-1).body.job_id, 'longtext-job');
+    assert.equal(requests.at(-1).body.text, fullSource, 'queued resume submits the entire 100k Unicode source');
+    await emit({ type: 'waiting', job_id: 'longtext-job', queue_position: 1, message: '等待模型处理，当前排队第 1 位…', translation: 'must not replace validated output' });
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, '', 'waiting never overwrites translation');
+    assert.match(document.querySelector('.workspace-status').textContent, /当前排队第 1 位/);
+    assert.doesNotMatch(document.querySelector('.workspace-status').textContent, /排队位置/, 'server queue message is not repeated');
+    await emit({ type: 'error', code: 'translation_queue_timeout', message: '翻译排队等待超时，可稍后继续' });
+    await React.act(async () => { streamController.close(); await new Promise((resolve) => setTimeout(resolve, 10)); });
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/, 'queue timeout retains the waiting checkpoint');
+    await click('.translate-button');
+    assert.equal(requests.at(-1).body.job_id, 'longtext-job');
+    assert.equal(requests.at(-1).body.text, fullSource);
+    await emit({ type: 'plan', job_id: 'longtext-job', total_chars: 100000, total_chunks: 2, completed_chars: 0, completed_chunks: 0 });
+    await emit({ type: 'waiting', message: '等待划词翻译完成', queue_position: 1 });
+    assert.match(document.querySelector('.workspace-status').textContent, /等待划词翻译完成/);
+    const beforeProgress = workspaceMathRenders.length;
+    await emit(...Array.from({ length: 1000 }, (_, index) => ({ type: 'progress', generated_chars: index, elapsed_ms: index, tokens_per_second: 20 })));
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
+    assert.equal(workspaceMathRenders.length, beforeProgress, 'progress does not rerender the unchanged source pane');
+    await click('[aria-label="设置"]');
+    assert.equal(document.querySelector('[data-math-preview]'), null, 'hidden workspace unmounts formula preview');
+    const hiddenRenders = workspaceMathRenders.length;
+    await emit({ type: 'segment_complete', translation: fullOutput.slice(0, 60000), completed_chars: 50000, completed_chunks: 1 });
+    assert.equal(workspaceMathRenders.length, hiddenRenders);
+    await click('[aria-label="翻译"]');
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullOutput.slice(0, 60000));
+    await click('.text-pane:last-child .pane-actions button:last-child');
+    const boundedRenders = workspaceMathRenders.length;
+    await emit({ type: 'complete', job_id: 'longtext-job', translation: fullOutput, model: 'longtext-test-model', completed_chars: 100000, completed_chunks: 2 }, { type: 'segment_complete', translation: 'STALE APPEND' });
+    assert.equal(workspaceMathRenders.length, boundedRenders, 'an unchanged bounded prefix does not trigger repeated typesetting as output grows');
+    await React.act(async () => { streamController.close(); await new Promise((resolve) => setTimeout(resolve, 30)); });
+    assert.ok([...document.querySelectorAll('[data-math-preview]')].every((node) => node.textContent.length <= 4000));
+    await click('.text-pane:last-child .pane-actions button:first-child');
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullOutput, 'terminal output is complete, ignores late events, and remains available for selection and copying');
+    await click('.text-pane:first-child .pane-actions button:first-child');
+    assert.equal(document.querySelector('textarea[aria-label="原文"]').value, fullSource);
+    await click('[aria-label="历史记录"]');
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    const row = [...document.querySelectorAll('.history-card')].find((node) => node.textContent.includes('longtext-test-model'));
+    assert.equal(row.querySelectorAll('.history-text').length, 0, 'collapsed history retains only previews');
+    await React.act(async () => row.querySelector('.history-expand').click());
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    assert.equal(row.querySelectorAll('.history-text')[0].textContent, fullSource);
+    assert.equal(row.querySelectorAll('.history-text')[1].textContent, fullOutput);
+    await click('[aria-label="翻译"]');
+    await click('.translate-button');
+    await emit({ type: 'plan', job_id: 'cancel-longtext', translation: '', total_chunks: 2, total_chars: 100000 }, { type: 'segment_complete', translation: fullOutput.slice(0, 60000), completed_chars: 50000, completed_chunks: 1 }, { type: 'progress', elapsed_ms: 4321 });
+    await React.act(async () => {
+      [...document.querySelectorAll('button')].find((button) => button.textContent === '取消翻译').click();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    assert.equal(document.querySelector('textarea[aria-label="译文"]').value, fullOutput.slice(0, 60000));
+    assert.match(document.querySelector('.translate-button').textContent, /继续翻译/);
+    assert.match(document.querySelector('.workspace-status').textContent, /已完成 1\/2 段/);
+    await React.act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
+    assert.match(document.querySelector('.workspace-status').textContent, /已取消/);
+  } finally {
+    await React.act(async () => root.unmount());
+    globalThis.fetch = originalFetch;
+    delete globalThis.workspaceMathRenders;
+    dom.window.close();
+  }
 });

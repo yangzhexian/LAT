@@ -2,24 +2,19 @@
 from __future__ import annotations
 
 from collections import deque
-import csv
 import math
-import subprocess
 import threading
 import time
 from typing import Any
+from uuid import uuid4
 
-
-def number(value: str) -> float | None:
-    try:
-        result = float(value.strip())
-        return result if math.isfinite(result) and result >= 0 else None
-    except ValueError:
-        return None
+from .gpu_provider import GpuProvider
 
 
 class GpuTelemetry:
     def __init__(self):
+        self._provider = GpuProvider()
+        self._session_id = str(uuid4())
         self._lock = threading.Lock()
         self._updated = float('-inf')
         self._sample: dict[str, Any] = {}
@@ -29,6 +24,10 @@ class GpuTelemetry:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
 
     def configure(self, interval: float) -> None:
         if isinstance(interval, bool) or interval not in (0.5, 1, 2, 5):
@@ -49,6 +48,10 @@ class GpuTelemetry:
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout=3)
+        if self._thread is None or not self._thread.is_alive():
+            with self._lock:
+                self._provider.close()
+                self._updated = float("-inf")
 
     def _record(self, sample: dict[str, Any]) -> None:
         with self._state_lock:
@@ -58,48 +61,39 @@ class GpuTelemetry:
             while self._history and self._history[0]["timestamp"] < cutoff:
                 self._history.popleft()
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, since: float | None = None) -> dict[str, Any]:
+        if since is not None and (isinstance(since, bool) or not isinstance(since, (int, float)) or not math.isfinite(since) or since < 0):
+            raise ValueError("采样游标必须是非负有限时间戳")
         with self._state_lock:
-            cutoff = time.time() - 300
-            samples = [sample for sample in self._history if sample["timestamp"] >= cutoff]
-            latest = samples[-1] if samples else {"timestamp": time.time(), "gpus": [], "message": "正在读取显卡…"}
-            return {**latest, "samples": samples, "interval": self._interval}
+            now = time.time()
+            samples = [sample for sample in self._history if sample["timestamp"] >= now - 300]
+            latest = samples[-1] if samples else {"timestamp": now, "gpus": [], "message": "正在读取显卡…",
+                                                  "provider": None, "provider_status": "starting", "provider_message": "", "provider_interval": None}
+            cursor = samples[-1]["timestamp"] if samples else None
+            reset = since is not None and (cursor is None or since > cursor)
+            selected = samples if since is None or reset else [sample for sample in samples if sample["timestamp"] > since]
+            return {**latest, "samples": selected, "interval": self._interval,
+                    "session_id": self._session_id, "cursor": cursor, "reset": reset}
 
     def _collect(self) -> None:
-        while not self._stop.is_set():
-            self._wake.clear()
-            started = time.monotonic()
-            self._record(self.sample(force=True))
-            with self._state_lock:
-                interval = self._interval
-            self._wake.wait(max(0.01, interval - (time.monotonic() - started)))
-
+        try:
+            while not self._stop.is_set():
+                self._wake.clear()
+                started = time.monotonic()
+                self._record(self.sample(force=True))
+                with self._state_lock:
+                    interval = self._interval
+                self._wake.wait(max(0.01, interval - (time.monotonic() - started)))
+        finally:
+            # Cleanup occurs on the collector even if a native read outlasts stop's join.
+            with self._lock:
+                self._provider.close()
+                self._updated = float("-inf")
 
     def sample(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
             if not force and time.monotonic() - self._updated < 0.4:
                 return self._sample
-            gpus = []
-            message = ""
-            try:
-                result = subprocess.run([
-                    "nvidia-smi",
-                    "--query-gpu=uuid,name,memory.used,memory.total,utilization.gpu,power.draw,power.limit,temperature.gpu",
-                    "--format=csv,noheader,nounits",
-                ], capture_output=True, text=True, timeout=2, check=False,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                if result.returncode != 0:
-                    message = "暂时无法读取 NVIDIA 显卡数据"
-                else:
-                    keys = ("memory_used_mib", "memory_total_mib", "utilization_pct", "power_w", "power_limit_w", "temperature_c")
-                    for row in csv.reader(result.stdout.splitlines()):
-                        if len(row) != 8:
-                            continue
-                        gpus.append({"id": row[0].strip(), "name": row[1].strip(),
-                                     **{key: number(value) for key, value in zip(keys, row[2:])}})
-            except (OSError, subprocess.TimeoutExpired):
-                message = "显卡监测不可用，请检查 NVIDIA 驱动"
-            self._sample = {"timestamp": time.time(), "gpus": gpus,
-                            "message": message or ("" if gpus else "未检测到可监测的 NVIDIA 显卡")}
+            self._sample = self._provider.read()
             self._updated = time.monotonic()
             return self._sample

@@ -197,7 +197,9 @@ html, body, * {
 .history-text { white-space: pre-wrap; max-height: 320px; overflow: auto; margin: 14px 0; }
 .history-actions { display: flex; gap: 12px; margin-top: 16px; }
 @media (max-width: 1100px) { .translator-screen { padding-left: 88px; } .pane-header { flex-wrap: wrap; padding: 10px; gap: 6px; } }
-.model-page { overflow: auto; flex: 1; min-height: 0; }
+/* Long model documents use the outer page scroll instead of a second scroller. */
+.translator-screen[data-page="model"], .translator-screen[data-page="architecture"] { height: auto; min-height: 100vh; }
+.model-page, .architecture-page { overflow: visible; flex: 1 0 auto; min-width: 0; }
 .model-page .setup-screen { min-height: auto; }
 
 /* Frosted workspace: opaque reading surfaces over a quiet, local background. */
@@ -324,14 +326,14 @@ svg { width: 22px; height: 22px; flex-shrink: 0; }
 .history-comparison h3 { height: 52px; overflow: auto; }
 
 /* Reserve scrollbar space before overflow, with breathing room inside it. */
-.settings-page, .history-page, .model-page, .language-options,
+.settings-page, .history-page, .language-options,
 .text-editor, .latex-preview, .history-text, .history-comparison h3 {
   scrollbar-gutter: stable;
 }
-.settings-page, .history-page, .model-page { padding-inline-end: 16px; }
+.settings-page, .history-page { padding-inline-end: 16px; }
 .language-options { padding-inline-end: 10px; }
 @supports not (scrollbar-gutter: stable) {
-  .settings-page, .history-page, .model-page, .language-options,
+  .settings-page, .history-page, .language-options,
   .text-editor, .latex-preview, .history-text { overflow-y: scroll; }
 }
 .history-grid .history-card { display: flex; flex-direction: column; }

@@ -11,7 +11,7 @@ async function loadTS(file, transform = (s) => s) {
 }
 const history = await loadTS('src/lib/history.ts');
 const text = await loadTS('src/lib/text.ts');
-const api = await loadTS('src/lib/api.ts', (s) => s.replace('import.meta.env.VITE_GATEWAY_URL', 'undefined'));
+const api = await loadTS('src/lib/api.ts', (s) => s.replace('import.meta.env.VITE_GATEWAY_URL', 'undefined').replace('import.meta.env.DEV', 'false'));
 
 test('history persists newest 30 records, supports deletion and clear', async () => {
   await history.updateHistory({ clear: true });
@@ -41,6 +41,10 @@ test('SSE completion, error and truncated transport are distinguished', async ()
     await assert.rejects(api.translateStream({}, () => {}), /提前结束/);
     globalThis.fetch = async () => new Response('data: {"type":"error","message":"failed"}\n\n');
     await assert.rejects(api.translateStream({}, () => {}), /failed/);
+    globalThis.fetch = async () => new Response('data: {"type":"error","message":"busy","code":"translation_busy"}\n\n');
+    await assert.rejects(api.translateStream({}, () => {}), (error) => error instanceof api.GatewayError && error.code === 'translation_busy');
+    globalThis.fetch = async () => Response.json({ error: { message: 'not loaded', code: 'model_not_ready' } }, { status: 503 });
+    await assert.rejects(api.translateStream({}, () => {}), (error) => error.code === 'model_not_ready');
     globalThis.fetch = async () => new Response('data: {"type":"complete","translation":"完成"}\n\n');
     const events = [];
     await api.translateStream({}, (event) => events.push(event));

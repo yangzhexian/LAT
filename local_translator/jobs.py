@@ -24,6 +24,10 @@ class TranslationJob:
     issues: set[str] = field(default_factory=set)
     generated_tokens: int = 0
     tokens_known: bool = True
+    prompt_tokens: int = 0
+    prompt_tokens_known: bool = True
+    owner: str = ""
+    live: bool = False
     eval_ns: int = 0
     eval_known: bool = True
     elapsed_ms: float = 0
